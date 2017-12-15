@@ -237,7 +237,7 @@ func lndMain() error {
 		net.JoinHostPort("", strconv.Itoa(cfg.PeerPort)),
 	}
 	server, err := newServer(defaultListenAddrs, chanDB, activeChainControl,
-		idPrivKey)
+		idPrivKey, cfg)
 	if err != nil {
 		srvrLog.Errorf("unable to create server: %v\n", err)
 		return err
