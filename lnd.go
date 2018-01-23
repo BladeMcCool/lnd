@@ -231,7 +231,7 @@ func lndMain() error {
 	// Set up the core server which will listen for incoming peer
 	// connections.
 	server, err := newServer(cfg.Listeners, chanDB, activeChainControl,
-		idPrivKey)
+		idPrivKey, cfg)
 	if err != nil {
 		srvrLog.Errorf("unable to create server: %v\n", err)
 		return err
