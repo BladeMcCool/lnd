@@ -487,8 +487,9 @@ func (h *htlcSuccessResolver) Resolve() (ContractResolver, error) {
 				return nil, err
 			}
 
-			log.Debugf("%T(%x): using %v sat/weight to sweep htlc",
-				"incoming+remote htlc confirmed", h, h.payHash[:])
+			log.Debugf("%T(%x): using %v sat/weight to sweep htlc"+
+				"incoming+remote htlc confirmed", h,
+				h.payHash[:], int64(satWeight))
 
 			// Using a weight estimator, we'll compute the total
 			// fee required, and from that the value we'll end up
@@ -511,9 +512,6 @@ func (h *htlcSuccessResolver) Resolve() (ContractResolver, error) {
 				Value:    sweepAmt,
 			})
 
-			log.Infof("%T(%v): crafted sweep tx=%v", h,
-				h.payHash[:], spew.Sdump(h.sweepTx))
-
 			// With the transaction fully assembled, we can now
 			// generate a valid witness for the transaction.
 			h.htlcResolution.SweepSignDesc.SigHashes = txscript.NewTxSigHashes(
@@ -527,6 +525,9 @@ func (h *htlcSuccessResolver) Resolve() (ContractResolver, error) {
 				return nil, err
 			}
 
+			log.Infof("%T(%x): crafted sweep tx=%v", h,
+				h.payHash[:], spew.Sdump(h.sweepTx))
+
 			// With the sweep transaction confirmed, we'll now
 			// Checkpoint our state.
 			if err := h.Checkpoint(h); err != nil {
@@ -538,6 +539,8 @@ func (h *htlcSuccessResolver) Resolve() (ContractResolver, error) {
 			//
 			// TODO(roasbeef): validate first?
 			if err := h.PublishTx(h.sweepTx); err != nil {
+				log.Infof("%T(%x): unable to publish tx: %v",
+					h, h.payHash[:], err)
 				return nil, err
 			}
 		}
@@ -551,6 +554,10 @@ func (h *htlcSuccessResolver) Resolve() (ContractResolver, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		log.Infof("%T(%x): waiting for sweep tx (txid=%v) to be "+
+			"confirmed", h, h.payHash[:], sweepTXID)
+
 		select {
 		case _, ok := <-confNtfn.Confirmed:
 			if !ok {
@@ -560,9 +567,6 @@ func (h *htlcSuccessResolver) Resolve() (ContractResolver, error) {
 		case <-h.Quit:
 			return nil, fmt.Errorf("quitting")
 		}
-
-		log.Infof("%T(%x): waiting for sweep tx (txid=%v) to be "+
-			"confirmed", h, h.payHash[:], sweepTXID)
 
 		// Once the transaction has received a sufficient number of
 		// confirmations, we'll mark ourselves as fully resolved and exit.
@@ -801,10 +805,21 @@ func (h *htlcOutgoingContestResolver) Resolve() (ContractResolver, error) {
 	// Otherwise, we'll watch for two external signals to decide if we'll
 	// morph into another resolver, or fully resolve the contract.
 
+	// The output we'll be watching for is the *direct* spend from the HTLC
+	// output. If this isn't our commitment transaction, it'll be right on
+	// the resolution. Otherwise, we fetch this pointer from the input of
+	// the time out transaction.
+	var outPointToWatch wire.OutPoint
+	if h.htlcResolution.SignedTimeoutTx == nil {
+		outPointToWatch = h.htlcResolution.ClaimOutpoint
+	} else {
+		outPointToWatch = h.htlcResolution.SignedTimeoutTx.TxIn[0].PreviousOutPoint
+	}
+
 	// First, we'll register for a spend notification for this output. If
 	// the remote party sweeps with the pre-image, we'll  be notified.
 	spendNtfn, err := h.Notifier.RegisterSpendNtfn(
-		&h.htlcResolution.ClaimOutpoint,
+		&outPointToWatch,
 		h.broadcastHeight,
 	)
 	if err != nil {
