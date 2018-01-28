@@ -91,6 +91,7 @@ type chainConfig struct {
 	TestNet3 bool `long:"testnet" description:"Use the test network"`
 	SimNet   bool `long:"simnet" description:"Use the simulation test network"`
 	RegTest  bool `long:"regtest" description:"Use the regression test network"`
+	MainNet  bool `long:"mainnet" description:"Use the main network (use extreme caution)"`
 
 	DefaultNumChanConfs int                 `long:"defaultchanconfs" description:"The default number of confirmations a channel must have before it's considered open. If this is not set, we will scale the value according to the channel size."`
 	DefaultRemoteDelay  int                 `long:"defaultremotedelay" description:"The default number of blocks we will require our channel counterparty to wait before accessing its funds in case of unilateral close. If this is not set, we will scale the value according to the channel size."`
@@ -351,8 +352,12 @@ func loadConfig() (*config, error) {
 			numNets++
 			activeNetParams = bitcoinSimNetParams
 		}
+		if cfg.Bitcoin.MainNet {
+			numNets++
+			activeNetParams = bitcoinMainNetParams
+		}
 		if numNets > 1 {
-			str := "%s: The testnet, segnet, and simnet params can't be " +
+			str := "%s: The testnet, segnet, simnet and mainnet params can't be " +
 				"used together -- choose one of the three"
 			err := fmt.Errorf(str, funcName)
 			return nil, err
