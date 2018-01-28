@@ -177,13 +177,17 @@ type chanOpenUpdate struct {
 	newChan Channel
 }
 
+// chanOpenFailureUpdate is a type of external state update that indicates
+// a previous channel open failed, and that it might be possible to try again.
+type chanOpenFailureUpdate struct{}
+
 // chanCloseUpdate is a type of external state update that indicates that the
 // backing Lightning Node has closed a previously open channel.
 type chanCloseUpdate struct {
 	closedChans []lnwire.ShortChannelID
 }
 
-// OnBalanceChange is a callback that should be executed each the balance of
+// OnBalanceChange is a callback that should be executed each time the balance of
 // the backing wallet changes.
 func (a *Agent) OnBalanceChange(delta btcutil.Amount) {
 	go func() {
@@ -203,6 +207,15 @@ func (a *Agent) OnChannelOpen(c Channel) {
 	}()
 }
 
+// OnChannelOpenFailure is a callback that should be executed when the
+// autopilot has attempted to open a channel, but failed. In this case we can
+// retry channel creation with a different node.
+func (a *Agent) OnChannelOpenFailure() {
+	go func() {
+		a.stateUpdates <- &chanOpenFailureUpdate{}
+	}()
+}
+
 // OnChannelClose is a callback that should be executed each time a prior
 // channel has been closed for any reason. This includes regular
 // closes, force closes, and channel breaches.
@@ -218,18 +231,21 @@ func (a *Agent) OnChannelClose(closedChans ...lnwire.ShortChannelID) {
 // channels open to, with the set of nodes that are pending new channels. This
 // ensures that the Agent doesn't attempt to open any "duplicate" channels to
 // the same node.
-func mergeNodeMaps(a map[NodeID]struct{},
-	b map[NodeID]Channel) map[NodeID]struct{} {
+func mergeNodeMaps(a map[NodeID]struct{}, b map[NodeID]struct{},
+	c map[NodeID]Channel) map[NodeID]struct{} {
 
-	c := make(map[NodeID]struct{}, len(a)+len(b))
+	res := make(map[NodeID]struct{}, len(a)+len(b)+len(c))
 	for nodeID := range a {
-		c[nodeID] = struct{}{}
+		res[nodeID] = struct{}{}
 	}
 	for nodeID := range b {
-		c[nodeID] = struct{}{}
+		res[nodeID] = struct{}{}
+	}
+	for nodeID := range c {
+		res[nodeID] = struct{}{}
 	}
 
-	return c
+	return res
 }
 
 // mergeChanState merges the Agent's set of active channels, with the set of
@@ -267,6 +283,10 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 	// TODO(roasbeef): do we in fact need to maintain order?
 	//  * use sync.Cond if so
 
+	// failedNodes lists nodes that we've previously attempted to initiate
+	// channels with, but didn't succeed.
+	failedNodes := make(map[NodeID]struct{})
+
 	// pendingOpens tracks the channels that we've requested to be
 	// initiated, but haven't yet been confirmed as being fully opened.
 	// This state is required as otherwise, we may go over our allotted
@@ -293,6 +313,11 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 					"update of: %v", update.balanceDelta)
 
 				a.totalBalance += update.balanceDelta
+
+			// The channel we tried to open previously failed for
+			// whatever reason.
+			case *chanOpenFailureUpdate:
+				log.Debug("Retrying after previous channel open failure.")
 
 			// A new channel has been opened successfully. This was
 			// either opened by the Agent, or an external system
@@ -351,7 +376,7 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 			// we avoid duplicate edges.
 			connectedNodes := a.chanState.ConnectedNodes()
 			pendingMtx.Lock()
-			nodesToSkip := mergeNodeMaps(connectedNodes, pendingOpens)
+			nodesToSkip := mergeNodeMaps(connectedNodes, failedNodes, pendingOpens)
 			pendingMtx.Unlock()
 
 			// If we reach this point, then according to our
@@ -410,8 +435,16 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 						pendingMtx.Lock()
 						nID := NewNodeID(directive.PeerKey)
 						delete(pendingOpens, nID)
+
+						// Mark this node as failed so we don't
+						// attempt it again.
+						failedNodes[nID] = struct{}{}
 						pendingMtx.Unlock()
 
+						// Trigger the autopilot controller to
+						// re-evaluate everything and possibly
+						// retry with a different node.
+						a.OnChannelOpenFailure()
 					}
 
 				}(chanCandidate)

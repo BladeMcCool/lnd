@@ -963,7 +963,7 @@ var sendPaymentCommand = cli.Command{
 	arguments need to be specified in order to complete the payment:
 	    * --dest=N
 	    * --amt=A
-	    * --final_ctlv_delta=T
+	    * --final_cltv_delta=T
 	    * --payment_hash=H
 
 	The --debug_send flag is provided for usage *purely* in test
@@ -1014,6 +1014,7 @@ func sendPayment(ctx *cli.Context) error {
 	if ctx.IsSet("pay_req") {
 		req = &lnrpc.SendRequest{
 			PaymentRequest: ctx.String("pay_req"),
+			Amt:            ctx.Int64("amt"),
 		}
 	} else {
 		args := ctx.Args()
@@ -1138,6 +1139,11 @@ var payInvoiceCommand = cli.Command{
 			Name:  "pay_req",
 			Usage: "a zpay32 encoded payment request to fulfill",
 		},
+		cli.Int64Flag{
+			Name: "amt",
+			Usage: "(optional) number of satoshis to fulfill the " +
+				"invoice",
+		},
 	},
 	Action: actionDecorator(payInvoice),
 }
@@ -1158,6 +1164,7 @@ func payInvoice(ctx *cli.Context) error {
 
 	req := &lnrpc.SendRequest{
 		PaymentRequest: payReq,
+		Amt:            ctx.Int64("amt"),
 	}
 
 	return sendPaymentRequest(ctx, req)
@@ -1168,9 +1175,10 @@ var addInvoiceCommand = cli.Command{
 	Usage: "add a new invoice.",
 	Description: `
 	Add a new invoice, expressing intent for a future payment.
-	
-	The value of the invoice in satoshis is necessary for the creation, 
-	the remaining parameters are optional.`,
+
+	Invoices without an amount can be created by not supplying any
+	parameters or providing an amount of 0. These invoices allow the payee
+	to specify the amount of satoshis they wish to send.`,
 	ArgsUsage: "value preimage",
 	Flags: []cli.Flag{
 		cli.StringFlag{
@@ -1190,8 +1198,8 @@ var addInvoiceCommand = cli.Command{
 				"created.",
 		},
 		cli.Int64Flag{
-			Name:  "value",
-			Usage: "the value of this invoice in satoshis",
+			Name:  "amt",
+			Usage: "the amt of satoshis in this invoice",
 		},
 		cli.StringFlag{
 			Name: "description_hash",
@@ -1221,7 +1229,7 @@ func addInvoice(ctx *cli.Context) error {
 		preimage []byte
 		descHash []byte
 		receipt  []byte
-		value    int64
+		amt      int64
 		err      error
 	)
 
@@ -1231,16 +1239,14 @@ func addInvoice(ctx *cli.Context) error {
 	args := ctx.Args()
 
 	switch {
-	case ctx.IsSet("value"):
-		value = ctx.Int64("value")
+	case ctx.IsSet("amt"):
+		amt = ctx.Int64("amt")
 	case args.Present():
-		value, err = strconv.ParseInt(args.First(), 10, 64)
+		amt, err = strconv.ParseInt(args.First(), 10, 64)
 		args = args.Tail()
 		if err != nil {
-			return fmt.Errorf("unable to decode value argument: %v", err)
+			return fmt.Errorf("unable to decode amt argument: %v", err)
 		}
-	default:
-		return fmt.Errorf("value argument missing")
 	}
 
 	switch {
@@ -1268,7 +1274,7 @@ func addInvoice(ctx *cli.Context) error {
 		Memo:            ctx.String("memo"),
 		Receipt:         receipt,
 		RPreimage:       preimage,
-		Value:           value,
+		Value:           amt,
 		DescriptionHash: descHash,
 		FallbackAddr:    ctx.String("fallback_addr"),
 		Expiry:          ctx.Int64("expiry"),
@@ -2009,8 +2015,8 @@ func verifyMessage(ctx *cli.Context) error {
 var feeReportCommand = cli.Command{
 	Name:  "feereport",
 	Usage: "display the current fee policies of all active channels",
-	Description: `
-	Returns the current fee policies of all active channels. 
+	Description: ` 
+	Returns the current fee policies of all active channels.
 	Fee policies can be updated using the updatechanpolicy command.`,
 	Action: actionDecorator(feeReport),
 }

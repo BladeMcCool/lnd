@@ -1473,7 +1473,7 @@ func (r *rpcServer) ListChannels(ctx context.Context,
 
 // savePayment saves a successfully completed payment to the database for
 // historical record keeping.
-func (r *rpcServer) savePayment(route *routing.Route, amount lnwire.MilliSatoshi, rHash []byte) error {
+func (r *rpcServer) savePayment(route *routing.Route, amount lnwire.MilliSatoshi, preImage []byte) error {
 
 	paymentPath := make([][33]byte, len(route.Hops))
 	for i, hop := range route.Hops {
@@ -1492,7 +1492,7 @@ func (r *rpcServer) savePayment(route *routing.Route, amount lnwire.MilliSatoshi
 		Fee:            route.TotalFees,
 		TimeLockLength: route.TotalTimeLock,
 	}
-	copy(payment.PaymentHash[:], rHash)
+	copy(payment.PaymentPreimage[:], preImage)
 
 	return r.server.chanDB.AddPayment(payment)
 }
@@ -1623,18 +1623,20 @@ func (r *rpcServer) SendPayment(paymentStream lnrpc.Lightning_SendPaymentServer)
 					}
 					p.dest = payReq.Destination.SerializeCompressed()
 
+					// If the amount was not included in the
+					// invoice, then we let the payee
+					// specify the amount of satoshis they
+					// wish to send. We override the amount
+					// to pay with the amount provided from
+					// the payment request.
 					if payReq.MilliSat == nil {
-						err := fmt.Errorf("only payment" +
-							" requests specifying" +
-							" the amount are" +
-							" currently supported")
-						select {
-						case errChan <- err:
-						case <-reqQuit:
-						}
-						return
+						p.msat = lnwire.NewMSatFromSatoshis(
+							btcutil.Amount(nextPayment.Amt),
+						)
+					} else {
+						p.msat = *payReq.MilliSat
 					}
-					p.msat = *payReq.MilliSat
+
 					p.pHash = payReq.PaymentHash[:]
 					p.cltvDelta = uint16(payReq.MinFinalCLTVExpiry())
 				} else {
@@ -1740,7 +1742,7 @@ func (r *rpcServer) SendPayment(paymentStream lnrpc.Lightning_SendPaymentServer)
 
 				// Save the completed payment to the database
 				// for record keeping purposes.
-				if err := r.savePayment(route, p.msat, rHash[:]); err != nil {
+				if err := r.savePayment(route, p.msat, preImage[:]); err != nil {
 					errChan <- err
 					return
 				}
@@ -1806,11 +1808,18 @@ func (r *rpcServer) SendPaymentSync(ctx context.Context,
 
 		destPub = payReq.Destination
 
+		// If the amount was not included in the invoice, then we let
+		// the payee specify the amount of satoshis they wish to send.
+		// We override the amount to pay with the amount provided from
+		// the payment request.
 		if payReq.MilliSat == nil {
-			return nil, fmt.Errorf("payment requests with no " +
-				"amount specified not currently supported")
+			amtMSat = lnwire.NewMSatFromSatoshis(
+				btcutil.Amount(nextPayment.Amt),
+			)
+		} else {
+			amtMSat = *payReq.MilliSat
 		}
-		amtMSat = *payReq.MilliSat
+
 		rHash = *payReq.PaymentHash
 		cltvDelta = uint16(payReq.MinFinalCLTVExpiry())
 
@@ -1876,7 +1885,7 @@ func (r *rpcServer) SendPaymentSync(ctx context.Context,
 
 	// With the payment completed successfully, we now ave the details of
 	// the completed payment to the database for historical record keeping.
-	if err := r.savePayment(route, amtMSat, rHash[:]); err != nil {
+	if err := r.savePayment(route, amtMSat, preImage[:]); err != nil {
 		return nil, err
 	}
 
@@ -1939,14 +1948,10 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 
 	amt := btcutil.Amount(invoice.Value)
 	amtMSat := lnwire.NewMSatFromSatoshis(amt)
-	switch {
-	// The value of an invoice MUST NOT be zero.
-	case invoice.Value == 0:
-		return nil, fmt.Errorf("zero value invoices are disallowed")
 
 	// The value of the invoice must also not exceed the current soft-limit
 	// on the largest payment within the network.
-	case amtMSat > maxPaymentMSat:
+	if amtMSat > maxPaymentMSat {
 		return nil, fmt.Errorf("payment of %v is too large, max "+
 			"payment allowed is %v", amt, maxPaymentMSat.ToSatoshis())
 	}
@@ -1962,9 +1967,12 @@ func (r *rpcServer) AddInvoice(ctx context.Context,
 	// expiry, fallback address, and the amount field.
 	var options []func(*zpay32.Invoice)
 
-	// Add the amount. This field is optional by the BOLT-11 format, but
-	// we require it for now.
-	options = append(options, zpay32.Amount(amtMSat))
+	// We only include the amount in the invoice if it is greater than 0.
+	// By not including the amount, we enable the creation of invoices that
+	// allow the payee to specify the amount of satoshis they wish to send.
+	if amtMSat > 0 {
+		options = append(options, zpay32.Amount(amtMSat))
+	}
 
 	// If specified, add a fallback address to the payment request.
 	if len(invoice.FallbackAddr) > 0 {
@@ -2925,11 +2933,13 @@ func (r *rpcServer) ListPayments(ctx context.Context,
 			path[i] = hex.EncodeToString(hop[:])
 		}
 
+		paymentHash := sha256.Sum256(payment.PaymentPreimage[:])
 		paymentsResp.Payments[i] = &lnrpc.Payment{
-			PaymentHash:  hex.EncodeToString(payment.PaymentHash[:]),
-			Value:        int64(payment.Terms.Value.ToSatoshis()),
-			CreationDate: payment.CreationDate.Unix(),
-			Path:         path,
+			PaymentHash:     hex.EncodeToString(paymentHash[:]),
+			Value:           int64(payment.Terms.Value.ToSatoshis()),
+			CreationDate:    payment.CreationDate.Unix(),
+			Path:            path,
+			PaymentPreimage: hex.EncodeToString(payment.PaymentPreimage[:]),
 		}
 	}
 

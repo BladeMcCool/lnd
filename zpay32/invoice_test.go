@@ -142,6 +142,14 @@ func TestDecodeEncode(t *testing.T) {
 			valid:          false,
 		},
 		{
+			encodedInvoice: "lnbc20m1pvjluezhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqfqqepvrhrm9s57hejg0p662ur5j5cr03890fa7k2pypgttmh4897d3raaq85a293e9jpuqwl0rnfuwzam7yr8e690nd2ypcq9hlkdwdvycqjhlqg5", // empty fallback address field
+			valid:          false,
+		},
+		{
+			encodedInvoice: "lnbc20m1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsfpp3qjmp7lwpagxun9pygexvgpjdc4jdj85frqg00000000j9n4evl6mr5aj9f58zp6fyjzup6ywn3x6sk8akg5v4tgn2q8g4fhx05wf6juaxu9760yp46454gpg5mtzgerlzezqcqvjnhjh8z3g2qqsj5cgu", // invalid routing info length: not a multiple of 51
+			valid:          false,
+		},
+		{
 			// no payment hash set
 			encodedInvoice: "lnbc20m1pvjluezhp58yjmdan79s6qqdhdzgynm4zwqd5d7xmw5fk98klysy043l2ahrqsjv38luh6p6s2xrv3mzvlmzaya43376h0twal5ax0k6p47498hp3hnaymzhsn424rxqjs0q7apn26yrhaxltq3vzwpqj9nc2r3kzwccsplnq470",
 			valid:          false,
@@ -232,6 +240,26 @@ func TestDecodeEncode(t *testing.T) {
 				}
 			},
 			skipEncoding: true, // Skip encoding since we don't have the unknown fields to encode.
+		},
+		{
+			// Invoice with no amount.
+			encodedInvoice: "lnbc1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jshwlglv23cytkzvq8ld39drs8sq656yh2zn0aevrwu6uqctaklelhtpjnmgjdzmvwsh0kuxuwqf69fjeap9m5mev2qzpp27xfswhs5vgqmn9xzq",
+			valid:          true,
+			decodedInvoice: func() *Invoice {
+				return &Invoice{
+					Net:         &chaincfg.MainNetParams,
+					Timestamp:   time.Unix(1496314658, 0),
+					PaymentHash: &testPaymentHash,
+					Description: &testCupOfCoffee,
+					Destination: testPubKey,
+				}
+			},
+			beforeEncoding: func(i *Invoice) {
+				// Since this destination pubkey was recovered
+				// from the signature, we must set it nil before
+				// encoding to get back the same invoice string.
+				i.Destination = nil
+			},
 		},
 		{
 			// Please make a donation of any amount using rhash 0001020304050607080900010203040506070809000102030405060708090102 to me @03e7156ae33b0a208d0744199163177e909e80176e55d97a2f221ede0f934dd9ad
@@ -530,6 +558,19 @@ func TestNewInvoice(t *testing.T) {
 					Description(testPleaseConsider))
 			},
 			valid: false, // Both Description and DescriptionHash set.
+		},
+		{
+			// Invoice with no amount.
+			newInvoice: func() (*Invoice, error) {
+				return NewInvoice(
+					&chaincfg.MainNetParams,
+					testPaymentHash,
+					time.Unix(1496314658, 0),
+					Description(testCupOfCoffee),
+				)
+			},
+			valid:          true,
+			encodedInvoice: "lnbc1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jshwlglv23cytkzvq8ld39drs8sq656yh2zn0aevrwu6uqctaklelhtpjnmgjdzmvwsh0kuxuwqf69fjeap9m5mev2qzpp27xfswhs5vgqmn9xzq",
 		},
 		{
 			// 'n' field set.
