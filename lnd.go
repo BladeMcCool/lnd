@@ -19,12 +19,13 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/pprof"
 	"sync"
 	"time"
 
-	"gopkg.in/macaroon-bakery.v1/bakery"
+	"gopkg.in/macaroon-bakery.v2/bakery"
 
 	"golang.org/x/net/context"
 
@@ -133,9 +134,14 @@ func lndMain() error {
 		defer pprof.StopCPUProfile()
 	}
 
+	// Create the network-segmented directory for the channel database.
+	graphDir := filepath.Join(cfg.DataDir,
+		defaultGraphSubDirname,
+		normalizeNetwork(activeNetParams.Name))
+
 	// Open the channeldb, which is dedicated to storing channel, and
 	// network related metadata.
-	chanDB, err := channeldb.Open(cfg.DataDir)
+	chanDB, err := channeldb.Open(graphDir)
 	if err != nil {
 		ltndLog.Errorf("unable to open channeldb: %v", err)
 		return err
@@ -143,10 +149,15 @@ func lndMain() error {
 	defer chanDB.Close()
 
 	// Only process macaroons if --no-macaroons isn't set.
-	var macaroonService *bakery.Service
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var macaroonService *bakery.Bakery
 	if !cfg.NoMacaroons {
 		// Create the macaroon authentication/authorization service.
-		macaroonService, err = macaroons.NewService(macaroonDatabaseDir)
+		macaroonService, err = macaroons.NewService(macaroonDatabaseDir,
+			macaroons.IPLockChecker)
 		if err != nil {
 			srvrLog.Errorf("unable to create macaroon service: %v", err)
 			return err
@@ -154,8 +165,8 @@ func lndMain() error {
 
 		// Create macaroon files for lncli to use if they don't exist.
 		if !fileExists(cfg.AdminMacPath) && !fileExists(cfg.ReadMacPath) {
-			err = genMacaroons(macaroonService, cfg.AdminMacPath,
-				cfg.ReadMacPath)
+			err = genMacaroons(ctx, macaroonService,
+				cfg.AdminMacPath, cfg.ReadMacPath)
 			if err != nil {
 				ltndLog.Errorf("unable to create macaroon "+
 					"files: %v", err)
@@ -368,9 +379,19 @@ func lndMain() error {
 	}
 	server.fundingMgr = fundingMgr
 
+	// Check macaroon authentication if macaroons aren't disabled.
+	if macaroonService != nil {
+		serverOpts = append(serverOpts,
+			grpc.UnaryInterceptor(macaroons.UnaryServerInterceptor(
+				macaroonService, permissions)),
+			grpc.StreamInterceptor(macaroons.StreamServerInterceptor(
+				macaroonService, permissions)),
+		)
+	}
+
 	// Initialize, and register our implementation of the gRPC interface
 	// exported by the rpcServer.
-	rpcServer := newRPCServer(server, macaroonService)
+	rpcServer := newRPCServer(server)
 	if err := rpcServer.Start(); err != nil {
 		return err
 	}
@@ -393,10 +414,6 @@ func lndMain() error {
 	}
 
 	// Finally, start the REST proxy for our gRPC server above.
-	ctx := context.Background()
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	mux := proxy.NewServeMux()
 	err = lnrpc.RegisterLightningHandlerFromEndpoint(ctx, mux,
 		cfg.RPCListeners[0], proxyOpts)
@@ -649,32 +666,35 @@ func genCertPair(certFile, keyFile string) error {
 
 // genMacaroons generates a pair of macaroon files; one admin-level and one
 // read-only. These can also be used to generate more granular macaroons.
-func genMacaroons(svc *bakery.Service, admFile, roFile string) error {
-	// Generate the admin macaroon and write it to a file.
-	admMacaroon, err := svc.NewMacaroon("", nil, nil)
-	if err != nil {
-		return err
-	}
-	admBytes, err := admMacaroon.MarshalBinary()
-	if err != nil {
-		return err
-	}
-	if err = ioutil.WriteFile(admFile, admBytes, 0600); err != nil {
-		return err
-	}
+func genMacaroons(ctx context.Context, svc *bakery.Bakery, admFile,
+	roFile string) error {
 
 	// Generate the read-only macaroon and write it to a file.
-	roMacaroon, err := macaroons.AddConstraints(admMacaroon,
-		macaroons.AllowConstraint(roPermissions...))
+	roMacaroon, err := svc.Oven.NewMacaroon(ctx, bakery.LatestVersion, nil,
+		readPermissions...)
 	if err != nil {
 		return err
 	}
-	roBytes, err := roMacaroon.MarshalBinary()
+	roBytes, err := roMacaroon.M().MarshalBinary()
 	if err != nil {
 		return err
 	}
 	if err = ioutil.WriteFile(roFile, roBytes, 0644); err != nil {
 		os.Remove(admFile)
+		return err
+	}
+
+	// Generate the admin macaroon and write it to a file.
+	admMacaroon, err := svc.Oven.NewMacaroon(ctx, bakery.LatestVersion,
+		nil, append(readPermissions, writePermissions...)...)
+	if err != nil {
+		return err
+	}
+	admBytes, err := admMacaroon.M().MarshalBinary()
+	if err != nil {
+		return err
+	}
+	if err = ioutil.WriteFile(admFile, admBytes, 0600); err != nil {
 		return err
 	}
 
@@ -686,7 +706,7 @@ func genMacaroons(svc *bakery.Service, admFile, roFile string) error {
 // the user to this RPC server.
 func waitForWalletPassword(grpcEndpoints, restEndpoints []string,
 	serverOpts []grpc.ServerOption, proxyOpts []grpc.DialOption,
-	tlsConf *tls.Config, macaroonService *bakery.Service) ([]byte, []byte, error) {
+	tlsConf *tls.Config, macaroonService *bakery.Bakery) ([]byte, []byte, error) {
 
 	// Set up a new PasswordService, which will listen
 	// for passwords provided over RPC.
