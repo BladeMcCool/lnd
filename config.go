@@ -126,9 +126,10 @@ type bitcoindConfig struct {
 
 type autoPilotConfig struct {
 	// TODO(roasbeef): add
-	Active      bool    `long:"active" description:"If the autopilot agent should be active or not."`
-	MaxChannels int     `long:"maxchannels" description:"The maximum number of channels that should be created"`
-	Allocation  float64 `long:"allocation" description:"The percentage of total funds that should be committed to automatic channel establishment"`
+	Active           bool    `long:"active" description:"If the autopilot agent should be active or not."`
+	MaxChannels      int     `long:"maxchannels" description:"The maximum number of channels that should be created"`
+	Allocation       float64 `long:"allocation" description:"The percentage of total funds that should be committed to automatic channel establishment"`
+	MaxFundingAmount int64   `long:"maxfundingamount" description:"Max satoshis to allocate per new channel that is made"`
 }
 
 // config defines the configuration options for lnd.

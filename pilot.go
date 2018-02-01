@@ -133,8 +133,13 @@ func initAutoPilot(svr *server, cfg *autoPilotConfig) (*autopilot.Agent, error) 
 	//
 	// TODO(roasbeef): switch here to dispatch specified heuristic
 	minChanSize := svr.cc.wallet.Cfg.DefaultConstraints.DustLimit * 5
+	prefAttachmentMaxFundingAmount := maxFundingAmount
+	cfgMaxFundAmt := btcutil.Amount(cfg.MaxFundingAmount)
+	if (cfgMaxFundAmt > 0) && (cfgMaxFundAmt < maxFundingAmount) {
+		prefAttachmentMaxFundingAmount = cfgMaxFundAmt
+	}
 	prefAttachment := autopilot.NewConstrainedPrefAttachment(
-		minChanSize, maxFundingAmount,
+		minChanSize, prefAttachmentMaxFundingAmount,
 		uint16(cfg.MaxChannels), cfg.Allocation,
 	)
 
@@ -160,9 +165,10 @@ func initAutoPilot(svr *server, cfg *autoPilotConfig) (*autopilot.Agent, error) 
 	initialChanState := make([]autopilot.Channel, len(activeChannels))
 	for i, channel := range activeChannels {
 		initialChanState[i] = autopilot.Channel{
-			ChanID:   channel.ShortChanID,
-			Capacity: channel.Capacity,
-			Node:     autopilot.NewNodeID(channel.IdentityPub),
+			ChanID:      channel.ShortChanID,
+			Capacity:    channel.Capacity,
+			IsInitiator: channel.IsInitiator,
+			Node:        autopilot.NewNodeID(channel.IdentityPub),
 		}
 	}
 

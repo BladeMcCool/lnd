@@ -1496,9 +1496,7 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(nMsg *networkMsg) []n
 		// We'll ignore any channel announcements that target any chain
 		// other than the set of chains we know of.
 		if !bytes.Equal(msg.ChainHash[:], d.cfg.ChainHash[:]) {
-			log.Error("Ignoring ChannelUpdate from "+
-				"chain=%v, gossiper on chain=%v", msg.ChainHash,
-				d.cfg.ChainHash)
+			log.Errorf("Ignoring ChannelUpdate from chain=%v, gossiper on chain=%v", msg.ChainHash, d.cfg.ChainHash)
 			return nil
 		}
 

@@ -53,6 +53,7 @@ type Channel struct {
 
 	// TODO(roasbeef): also add other traits?
 	//  * fee, timelock, etc
+	IsInitiator bool
 }
 
 // ChannelEdge is a struct that holds details concerning a channel, but also
@@ -122,7 +123,8 @@ type AttachmentHeuristic interface {
 	// additional channels should be opened within the graph to push the
 	// heuristic back towards its equilibrium state.
 	Select(self *btcec.PublicKey, graph ChannelGraph, amtToUse btcutil.Amount,
-		skipNodes map[NodeID]struct{}) ([]AttachmentDirective, error)
+		skipNodes map[NodeID]struct{},
+		totalChans []Channel) ([]AttachmentDirective, error)
 }
 
 // ChannelController is a simple interface that allows an auto-pilot agent to

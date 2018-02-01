@@ -3,6 +3,7 @@ package autopilot
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -181,6 +182,9 @@ type chanOpenUpdate struct {
 // a previous channel open failed, and that it might be possible to try again.
 type chanOpenFailureUpdate struct{}
 
+// heart beat
+type noopWakeup struct{}
+
 // chanCloseUpdate is a type of external state update that indicates that the
 // backing Lightning Node has closed a previously open channel.
 type chanCloseUpdate struct {
@@ -294,7 +298,15 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 	pendingOpens := make(map[NodeID]Channel)
 	var pendingMtx sync.Mutex
 
-	// TODO(roasbeef): add 10-minute wake up timer
+	// 10-minute wake up timer
+	go func() {
+		for {
+			time.Sleep(10 * time.Minute)
+			// time.Sleep(10 * time.Second)
+			log.Warnf("Sending noop wakeup")
+			a.stateUpdates <- &noopWakeup{}
+		}
+	}()
 	for {
 		select {
 		// A new external signal has arrived. We'll use this to update
@@ -302,7 +314,7 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 		// channel state modification (open/close, splice in/out).
 		case signal := <-a.stateUpdates:
 			log.Infof("Processing new external signal")
-
+			checkIfMoreChansNeeded := false
 			switch update := signal.(type) {
 			// The balance of the backing wallet has changed, if
 			// more funds are now available, we may attempt to open
@@ -313,11 +325,12 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 					"update of: %v", update.balanceDelta)
 
 				a.totalBalance += update.balanceDelta
+				checkIfMoreChansNeeded = true
 
 			// The channel we tried to open previously failed for
 			// whatever reason.
 			case *chanOpenFailureUpdate:
-				log.Debug("Retrying after previous channel open failure.")
+				log.Debug("Retrying (or not??) after previous channel open failure.")
 
 			// A new channel has been opened successfully. This was
 			// either opened by the Agent, or an external system
@@ -344,10 +357,21 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 				for _, closedChan := range update.closedChans {
 					delete(a.chanState, closedChan)
 				}
+				checkIfMoreChansNeeded = true
+
+			case *noopWakeup:
+				log.Warnf("Noop Wake-up")
+				checkIfMoreChansNeeded = true
+
+			}
+
+			if !checkIfMoreChansNeeded {
+				log.Warnf("Not checking if we need to make more chans at the moment.")
+				continue
 			}
 
 			pendingMtx.Lock()
-			log.Debugf("Pending channels: %v", spew.Sdump(pendingOpens))
+			log.Debugf("P3nding channels: %v", spew.Sdump(pendingOpens))
 			pendingMtx.Unlock()
 
 			// With all the updates applied, we'll obtain a set of
@@ -366,6 +390,7 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 				totalChans, a.totalBalance,
 			)
 			if !needMore {
+				log.Warnf("Doesn't think we need to open or modify any channels at this time.")
 				continue
 			}
 
@@ -388,6 +413,7 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 			chanCandidates, err := a.cfg.Heuristic.Select(
 				a.cfg.Self, a.cfg.Graph, availableFunds,
 				nodesToSkip,
+				totalChans,
 			)
 			if err != nil {
 				log.Errorf("Unable to select candidates for "+
@@ -396,11 +422,11 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 			}
 
 			if len(chanCandidates) == 0 {
-				log.Infof("No eligible candidates to connect to")
+				log.Warnf("No eligible candidates to connect to")
 				continue
 			}
 
-			log.Infof("Attempting to execute channel attachment "+
+			log.Warnf("Attempting to execute channel attachment "+
 				"directives: %v", spew.Sdump(chanCandidates))
 
 			// For each recommended attachment directive, we'll
@@ -412,8 +438,9 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 			for _, chanCandidate := range chanCandidates {
 				nID := NewNodeID(chanCandidate.PeerKey)
 				pendingOpens[nID] = Channel{
-					Capacity: chanCandidate.ChanAmt,
-					Node:     nID,
+					Capacity:    chanCandidate.ChanAmt,
+					Node:        nID,
+					IsInitiator: true,
 				}
 
 				go func(directive AttachmentDirective) {

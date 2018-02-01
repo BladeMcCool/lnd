@@ -473,6 +473,7 @@ func lndMain() error {
 				err)
 			return err
 		}
+		ltndLog.Info("auto pilot should be initialized.")
 	}
 
 	addInterruptHandler(func() {
