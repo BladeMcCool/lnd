@@ -34,7 +34,9 @@ var _ net.Conn = (*Conn)(nil)
 // a non-nil error is returned.
 func Dial(localPriv *btcec.PrivateKey, netAddr *lnwire.NetAddress) (*Conn, error) {
 	ipAddr := netAddr.Address.String()
-	conn, err := net.Dial("tcp", ipAddr)
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	conn, err := dialer.Dial("tcp", ipAddr)
+	// conn, err := net.Dial("tcp", ipAddr)
 	if err != nil {
 		return nil, err
 	}

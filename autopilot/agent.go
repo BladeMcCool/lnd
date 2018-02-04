@@ -1,6 +1,7 @@
 package autopilot
 
 import (
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,7 +33,7 @@ type Config struct {
 	// ChanController is an interface that is able to directly manage the
 	// creation, closing and update of channels within the network.
 	ChanController ChannelController
-
+	Server         PeerScannerServer //cuz i didnt want to jam these methods into ChanController.
 	// WalletBalance is a function closure that should return the current
 	// available balance o the backing wallet.
 	WalletBalance func() (btcutil.Amount, error)
@@ -109,6 +110,20 @@ type Agent struct {
 
 	quit chan struct{}
 	wg   sync.WaitGroup
+
+	connectableNodeAddressesLock sync.Mutex
+	connectableNodeAddresses     *[]nodeAddrConnectability
+}
+
+// NodeID is a simple type that holds a EC public key serialized in compressed
+// format.
+type NodeID [33]byte
+
+// NewNodeID creates a new nodeID from a passed public key.
+func NewNodeID(pub *btcec.PublicKey) NodeID {
+	var n NodeID
+	copy(n[:], pub.SerializeCompressed())
+	return n
 }
 
 // New creates a new instance of the Agent instantiated using the passed
@@ -145,6 +160,7 @@ func (a *Agent) Start() error {
 	}
 
 	a.wg.Add(1)
+	a.startPeerScanner()
 	go a.controller(startingBalance)
 
 	return nil
@@ -370,15 +386,18 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 				continue
 			}
 
-			pendingMtx.Lock()
-			log.Debugf("P3nding channels: %v", spew.Sdump(pendingOpens))
-			pendingMtx.Unlock()
+			//TODO only do this check if are using the peer scanner.
+			if a.connectableNodeAddresses == nil {
+				log.Warnf("Doesn't think we know about any peers to open channels with anyway so whats the point :(")
+				continue
+			}
 
 			// With all the updates applied, we'll obtain a set of
 			// the current active channels (confirmed channels),
 			// and also factor in our set of unconfirmed channels.
 			confirmedChans := a.chanState
 			pendingMtx.Lock()
+			log.Debugf("P3nding channels: %v", spew.Sdump(pendingOpens))
 			totalChans := mergeChanState(pendingOpens, confirmedChans)
 			pendingMtx.Unlock()
 
@@ -403,6 +422,10 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 			pendingMtx.Lock()
 			nodesToSkip := mergeNodeMaps(connectedNodes, failedNodes, pendingOpens)
 			pendingMtx.Unlock()
+
+			// err := a.cfg.ChanController.CheckNodeConnectivity(a.cfg.Self, a.cfg.Graph)
+			log.Warnf("Autopilot debug bail early.")
+			continue
 
 			// If we reach this point, then according to our
 			// heuristic we should modify our channel state to tend
@@ -484,4 +507,205 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 			return
 		}
 	}
+}
+
+type nodeAddrConnectability struct {
+	nID       NodeID
+	node      Node
+	addr      net.Addr
+	count     int64
+	startedAt time.Time
+	started   bool
+	finished  bool
+	succeded  bool
+}
+
+func (a *Agent) checkNodeConnectivity() {
+	nodesWithAddr := 0
+	totalAddress := int64(0)
+
+	var nodeAddresses = make(map[NodeID][]nodeAddrConnectability)
+	nodeAddresseFlat := []*nodeAddrConnectability{}
+
+	if err := a.cfg.Graph.ForEachNode(func(n Node) error {
+		if n.PubKey().IsEqual(a.cfg.Self) {
+			log.Warnf("connecting to ourself would be silly.")
+			return nil
+		}
+		//we will only be here for nodes with addresses.
+		nodesWithAddr++
+		nID := NewNodeID(n.PubKey())
+		nodeAddresses[nID] = []nodeAddrConnectability{}
+		for _, addr := range n.Addrs() {
+			totalAddress++
+			connectability := nodeAddrConnectability{nID: nID, node: n, addr: addr, count: totalAddress}
+			nodeAddresses[nID] = append(nodeAddresses[nID], connectability)
+			nodeAddresseFlat = append(nodeAddresseFlat, &connectability)
+			// log.Warnf("some node with addr %s", addr)
+		}
+		return nil
+	}); err != nil {
+		return
+	}
+
+	connectorChan := make(chan *nodeAddrConnectability, totalAddress)
+	doneChan := make(chan *nodeAddrConnectability, totalAddress)
+	go func() {
+		diong := 0
+		for _, addr := range nodeAddresseFlat {
+			connectorChan <- addr
+			//sleep to not hammer.
+			diong++
+			log.Warnf("added %s to connectorChan (%d/%d)", addr.addr, diong, totalAddress)
+			// time.Sleep(100 * time.Millisecond)
+		}
+		close(connectorChan)
+	}()
+	//another goroutine to execute that
+
+	expectResults := int64(0)
+	go func() {
+		wg := sync.WaitGroup{}
+
+		connectAtOnce := 25 //TODO make this config'able.
+		wg.Add(connectAtOnce)
+		workAccepted := int64(0)
+		server := a.cfg.Server
+
+		for k := 0; k < connectAtOnce; k++ {
+			go func() {
+				defer wg.Done()
+				for addr := range connectorChan {
+					atomic.AddInt64(&workAccepted, 1)
+					// // First, we'll check if we're already connected to the target peer. If
+					// // not, then we'll need to establish a connection.
+					nodePubKey := addr.node.PubKey()
+					addr.startedAt = time.Now().UTC()
+
+					if server.ConnectedToNode(nodePubKey) {
+						log.Warnf("already connected to %s (cool!)", addr.addr)
+						continue
+					}
+
+					log.Warnf("can we connect to? %s %d / %d (addr.count %d)", addr.addr, workAccepted, totalAddress, addr.count)
+					lnAddr, err := server.GetLnAddr(nodePubKey, addr.addr)
+					if err != nil {
+						log.Warnf("getLnAddr Error: %s", err.Error())
+						continue
+					}
+
+					addr.started = true
+
+					////////////// DEBUG ///////////////////
+					// time.Sleep(time.Duration(50+rand.Int63n(300)) * time.Millisecond)
+					// if rand.Intn(5) == 0 {
+					// 	addr.succeded = true
+					// 	atomic.AddInt64(&expectResults, 1)
+					// 	doneChan <- addr
+					// }
+					// continue
+					////////////// DEBUG ///////////////////
+
+					// TODO(roasbeef): make perm connection in server after
+					// chan open?
+					err = server.ConnectToPeer(lnAddr, false)
+					addr.finished = true
+					if err != nil {
+						// If we weren't able to connect to the peer,
+						// then we'll move onto the next.
+						log.Warnf("connect err? %s ->  %s ", lnAddr.Address, err.Error())
+						continue
+					}
+					addr.succeded = true
+					log.Warnf("WOOTWOOT actually connected to %s", lnAddr.Address)
+
+					err = server.DisconnectPeer(nodePubKey)
+					if err != nil {
+						log.Warnf("disconnect err? %s -> %s ", lnAddr.Address, err.Error())
+					}
+
+					atomic.AddInt64(&expectResults, 1)
+					doneChan <- addr
+				}
+			}()
+		}
+		log.Warnf("waiting for %d simultaneous goroutines to plow through %d connection attempts.", connectAtOnce, totalAddress)
+		wg.Wait()
+		close(doneChan)
+		log.Warnf("done waiting, closed doneChan")
+	}()
+
+	stopReporter := false
+	go func() {
+		for {
+			// started := 0
+			finished := 0
+			activeCount := 0
+			for _, v := range nodeAddresseFlat {
+				if v.finished {
+					finished++
+				}
+				if v.started && !v.finished {
+					activeCount += 1
+					runningFor := time.Since(v.startedAt) / time.Millisecond
+					log.Warnf("REPORTER connection task %d running for %d msec (%s)", v.count, runningFor, v.addr)
+				}
+			}
+			log.Warnf("REPORTER believes %d connection attempts are currently actively being waited on, finsiehd %d/%d", activeCount, finished, totalAddress)
+			time.Sleep(10 * time.Second)
+			if stopReporter {
+				break
+			}
+		}
+	}()
+
+	resultCount := int64(0)
+	connectable := 0
+	log.Warnf("result of checking those things? ...")
+	for addr := range doneChan {
+		//do something with results.
+		resultCount++
+		log.Warnf("got a result #. %d (%d/%d)", addr.count, resultCount, expectResults)
+		if addr.succeded {
+			connectable++
+		}
+	}
+	stopReporter = true
+
+	//being here means we've collected all the results.
+	if resultCount != expectResults {
+		panic("go learn how channels work clearly?")
+	}
+
+	log.Warnf("we could connect to %d out of %d addresses we tried.", connectable, totalAddress)
+	log.Warnf("that was a total %d nodes with addresses, total of addresses %d", nodesWithAddr, totalAddress)
+
+	connectableNodeAddresses := make([]nodeAddrConnectability, connectable)
+	for i, v := range nodeAddresseFlat {
+		connectableNodeAddresses[i] = *v
+	}
+
+	// log.Warnf("now go to sleep little baby.")
+	// time.Sleep(10 * time.Second)
+
+	a.connectableNodeAddressesLock.Lock()
+	a.connectableNodeAddresses = &connectableNodeAddresses
+	a.connectableNodeAddressesLock.Unlock()
+
+	return
+	// return connectableNodeAddresses, nil
+}
+
+func (a *Agent) getConnectableNodesList() *[]nodeAddrConnectability {
+	a.connectableNodeAddressesLock.Lock()
+	defer a.connectableNodeAddressesLock.Unlock()
+	return a.connectableNodeAddresses
+}
+
+func (a *Agent) startPeerScanner() {
+	go func() {
+		a.checkNodeConnectivity()
+		log.Warnf("peerscanner sleeping for a while before running again.")
+		time.Sleep(30 * time.Minute)
+	}()
 }

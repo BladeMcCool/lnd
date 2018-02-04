@@ -153,3 +153,10 @@ type ChannelController interface {
 	// returned to an output under the control of the backing wallet.
 	SpliceOut(chanPoint *wire.OutPoint, amt btcutil.Amount) (*Channel, error)
 }
+
+type PeerScannerServer interface {
+	ConnectedToNode(*btcec.PublicKey) bool
+	ConnectToPeer(*lnwire.NetAddress, bool) error
+	DisconnectPeer(*btcec.PublicKey) error
+	GetLnAddr(*btcec.PublicKey, net.Addr) (*lnwire.NetAddress, error)
+}

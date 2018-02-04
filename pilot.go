@@ -1,8 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
+	_ "sync"
+	_ "sync/atomic"
+	_ "time"
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/lightningnetwork/lnd/autopilot"
@@ -16,6 +20,12 @@ import (
 // interface that's backed by a running lnd instance.
 type chanController struct {
 	server *server
+	// connectableNodeAddressesLock sync.Mutex
+	// connectableNodeAddresses     *[]nodeAddrConnectability
+}
+
+type peerscannerServer struct {
+	server *server
 }
 
 // OpenChannel opens a channel to a target peer, with a capacity of the
@@ -26,6 +36,7 @@ func (c *chanController) OpenChannel(target *btcec.PublicKey,
 
 	// We can't establish a channel if no addresses were provided for the
 	// peer.
+
 	if len(addrs) == 0 {
 		return fmt.Errorf("Unable to create channel w/o an active " +
 			"address")
@@ -118,6 +129,232 @@ func (c *chanController) SpliceOut(chanPoint *wire.OutPoint,
 	return nil, nil
 }
 
+func (s *peerscannerServer) ConnectedToNode(key *btcec.PublicKey) bool {
+	_, err := s.server.FindPeer(key)
+	return (err == nil)
+}
+func (s *peerscannerServer) ConnectToPeer(addr *lnwire.NetAddress, perm bool) error {
+	return s.server.ConnectToPeer(addr, perm)
+}
+func (s *peerscannerServer) DisconnectPeer(pubKey *btcec.PublicKey) error {
+	return s.server.DisconnectPeer(pubKey)
+}
+
+func (s *peerscannerServer) GetLnAddr(nodePubKey *btcec.PublicKey, addr net.Addr) (*lnwire.NetAddress, error) {
+	//TODO re-use this code in the place i got this from somehow??
+	tcpAddr, ok := addr.(*net.TCPAddr)
+	if !ok {
+		return nil, errors.New(fmt.Sprintf("TCP address required instead have %T", addr))
+	}
+	if tcpAddr.Port == 0 {
+		tcpAddr.Port = defaultPeerPort
+	}
+
+	lnAddr := &lnwire.NetAddress{
+		IdentityKey: nodePubKey,
+		ChainNet:    activeNetParams.Net,
+		Address:     tcpAddr,
+	}
+	return lnAddr, nil
+}
+
+// func (c *chanController) checkNodeConnectivity(self *btcec.PublicKey, graph autopilot.ChannelGraph) {
+// 	//what are the nodes?
+// 	_, _ = self, graph
+// 	nodesWithAddr := 0
+// 	totalAddress := int64(0)
+
+// 	var nodeAddresses = make(map[autopilot.NodeID][].NodeAddrConnectability)
+// 	nodeAddresseFlat := []*nodeAddrConnectability{}
+
+// 	if err := graph.ForEachNode(func(n autopilot.Node) error {
+// 		if n.PubKey().IsEqual(self) {
+// 			atplLog.Warnf("connecting to ourself would be silly.")
+// 			return nil
+// 		}
+// 		//we will only be here for nodes with addresses.
+// 		nodesWithAddr++
+// 		nID := autopilot.NewNodeID(n.PubKey())
+// 		nodeAddresses[nID] = []nodeAddrConnectability{}
+// 		for _, addr := range n.Addrs() {
+// 			totalAddress++
+// 			connectability := nodeAddrConnectability{nID: nID, node: n, addr: addr, count: totalAddress}
+// 			nodeAddresses[nID] = append(nodeAddresses[nID], connectability)
+// 			nodeAddresseFlat = append(nodeAddresseFlat, &connectability)
+// 			// atplLog.Warnf("some node with addr %s", addr)
+// 		}
+// 		return nil
+// 	}); err != nil {
+// 		return errors.New("woops")
+// 	}
+
+// 	connectorChan := make(chan *nodeAddrConnectability, totalAddress)
+// 	doneChan := make(chan *nodeAddrConnectability, totalAddress)
+// 	go func() {
+// 		diong := 0
+// 		for _, addr := range nodeAddresseFlat {
+// 			connectorChan <- addr
+// 			//sleep to not hammer.
+// 			diong++
+// 			atplLog.Warnf("added %s to connectorChan (%d/%d)", addr.addr, diong, totalAddress)
+// 			// time.Sleep(100 * time.Millisecond)
+// 		}
+// 		close(connectorChan)
+// 	}()
+// 	//another goroutine to execute that
+
+// 	expectResults := int64(0)
+// 	go func() {
+// 		wg := sync.WaitGroup{}
+
+// 		connectAtOnce := 25
+// 		wg.Add(connectAtOnce)
+// 		workAccepted := int64(0)
+// 		for k := 0; k < connectAtOnce; k++ {
+// 			go func() {
+// 				defer wg.Done()
+// 				for addr := range connectorChan {
+// 					atomic.AddInt64(&workAccepted, 1)
+// 					// // First, we'll check if we're already connected to the target peer. If
+// 					// // not, then we'll need to establish a connection.
+// 					nodePubKey := addr.node.PubKey()
+// 					addr.startedAt = time.Now().UTC()
+// 					if _, err := c.server.FindPeer(nodePubKey); err == nil {
+// 						atplLog.Warnf("already connected to %s (cool!)", addr.addr)
+// 						continue
+// 					}
+
+// 					atplLog.Warnf("can we connect to? %s %d / %d (addr.count %d)", addr.addr, workAccepted, totalAddress, addr.count)
+// 					tcpAddr, ok := addr.addr.(*net.TCPAddr)
+// 					if !ok {
+// 						atplLog.Errorf("TCP address required instead have %T", addr)
+// 						continue
+// 					}
+// 					if tcpAddr.Port == 0 {
+// 						tcpAddr.Port = defaultPeerPort
+// 					}
+
+// 					lnAddr := &lnwire.NetAddress{
+// 						IdentityKey: nodePubKey,
+// 						ChainNet:    activeNetParams.Net,
+// 						Address:     tcpAddr,
+// 					}
+
+// 					addr.started = true
+
+// 					////////////// DEBUG ///////////////////
+// 					// time.Sleep(time.Duration(50+rand.Int63n(300)) * time.Millisecond)
+// 					// if rand.Intn(5) == 0 {
+// 					// 	addr.succeded = true
+// 					// 	atomic.AddInt64(&expectResults, 1)
+// 					// 	doneChan <- addr
+// 					// }
+// 					// continue
+// 					////////////// DEBUG ///////////////////
+
+// 					// TODO(roasbeef): make perm connection in server after
+// 					// chan open?
+// 					err := c.server.ConnectToPeer(lnAddr, false)
+// 					addr.finished = true
+// 					if err != nil {
+// 						// If we weren't able to connect to the peer,
+// 						// then we'll move onto the next.
+// 						atplLog.Warnf("connect err? %s ->  %s ", tcpAddr, err.Error())
+// 						continue
+// 					}
+// 					addr.succeded = true
+// 					atplLog.Warnf("WOOTWOOT actually connected to %s", tcpAddr)
+
+// 					err = c.server.DisconnectPeer(nodePubKey)
+// 					if err != nil {
+// 						atplLog.Warnf("disconnect err? %s -> %s ", tcpAddr, err.Error())
+// 					}
+
+// 					atomic.AddInt64(&expectResults, 1)
+// 					doneChan <- addr
+// 				}
+// 			}()
+// 		}
+// 		atplLog.Warnf("waiting for %d simultaneous goroutines to plow through %d connection attempts.", connectAtOnce, totalAddress)
+// 		wg.Wait()
+// 		close(doneChan)
+// 		atplLog.Warnf("done waiting, closed doneChan")
+// 	}()
+
+// 	stopReporter := false
+// 	go func() {
+// 		for {
+// 			// started := 0
+// 			finished := 0
+// 			activeCount := 0
+// 			for _, v := range nodeAddresseFlat {
+// 				if v.finished {
+// 					finished++
+// 				}
+// 				if v.started && !v.finished {
+// 					activeCount += 1
+// 					runningFor := time.Since(v.startedAt) / time.Millisecond
+// 					atplLog.Warnf("REPORTER connection task %d running for %d msec (%s)", v.count, runningFor, v.addr)
+// 				}
+// 			}
+// 			atplLog.Warnf("REPORTER believes %d connection attempts are currently actively being waited on, finsiehd %d/%d", activeCount, finished, totalAddress)
+// 			time.Sleep(10 * time.Second)
+// 			if stopReporter {
+// 				break
+// 			}
+// 		}
+// 	}()
+
+// 	resultCount := int64(0)
+// 	connectable := 0
+// 	atplLog.Warnf("result of checking those things? ...")
+// 	for addr := range doneChan {
+// 		//do something with results.
+// 		resultCount++
+// 		atplLog.Warnf("got a result #. %d (%d/%d)", addr.count, resultCount, expectResults)
+// 		if addr.succeded {
+// 			connectable++
+// 		}
+// 	}
+// 	stopReporter = true
+
+// 	//being here means we've collected all the results.
+// 	if resultCount != expectResults {
+// 		panic("go learn how channels work clearly?")
+// 	}
+
+// 	atplLog.Warnf("we could connect to %d out of %d addresses we tried.", connectable, totalAddress)
+// 	atplLog.Warnf("that was a total %d nodes with addresses, total of addresses %d", nodesWithAddr, totalAddress)
+
+// 	connectableNodeAddresses := make([]*nodeAddrConnectability, connectable)
+// 	for i, v := range nodeAddresseFlat {
+// 		connectableNodeAddresses[i] = v
+// 	}
+
+// 	// atplLog.Warnf("now go to sleep little baby.")
+// 	// time.Sleep(10 * time.Second)
+
+// 	c.connectableNodeAddressesLock.Lock()
+// 	c.connectableNodeAddresses = &connectableNodeAddresses
+// 	c.connectableNodeAddressesLock.Unlock()
+
+// 	return
+// 	// return connectableNodeAddresses, nil
+// }
+
+// func (c *chanController) startPeerScanner(self *btcec.PublicKey, graph autopilot.ChannelGraph) {
+// 	go func() {
+// 		c.GetConnectableNodesList(self, graph)
+// 		time.Sleep(30 * time.Minute())
+// 	}()
+// }
+
+// func (c *chanController) GetConnectableNodesList() []autopilot.error {
+// 	c.connectableNodeAddressesLock.Lock()
+// 	defer c.connectableNodeAddressesLock.Unlock()
+// 	return c.connectableNodeAddresses
+// }
+
 // A compile time assertion to ensure chanController meets the
 // autopilot.ChannelController interface.
 var _ autopilot.ChannelController = (*chanController)(nil)
@@ -131,14 +368,16 @@ func initAutoPilot(svr *server, cfg *autoPilotConfig) (*autopilot.Agent, error) 
 	// First, we'll create the preferential attachment heuristic,
 	// initialized with the passed auto pilot configuration parameters.
 	//
-	// TODO(roasbeef): switch here to dispatch specified heuristic
 	minChanSize := svr.cc.wallet.Cfg.DefaultConstraints.DustLimit * 5
 	prefAttachmentMaxFundingAmount := maxFundingAmount
 	cfgMaxFundAmt := btcutil.Amount(cfg.MaxFundingAmount)
 	if (cfgMaxFundAmt > 0) && (cfgMaxFundAmt < maxFundingAmount) {
 		prefAttachmentMaxFundingAmount = cfgMaxFundAmt
 	}
-	prefAttachment := autopilot.NewConstrainedPrefAttachment(
+
+	// TODO(roasbeef): switch here to dispatch specified heuristic
+	// prefAttachment := autopilot.NewConstrainedPrefAttachment(
+	prefAttachment := autopilot.NewHackyPrefAttachment(
 		minChanSize, prefAttachmentMaxFundingAmount,
 		uint16(cfg.MaxChannels), cfg.Allocation,
 	)
@@ -150,6 +389,7 @@ func initAutoPilot(svr *server, cfg *autoPilotConfig) (*autopilot.Agent, error) 
 		Self:           self,
 		Heuristic:      prefAttachment,
 		ChanController: &chanController{svr},
+		Server:         &peerscannerServer{svr},
 		WalletBalance: func() (btcutil.Amount, error) {
 			return svr.cc.wallet.ConfirmedBalance(1, true)
 		},

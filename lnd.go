@@ -490,7 +490,7 @@ func lndMain() error {
 				err)
 			return err
 		}
-		ltndLog.Info("auto pilot should be initialized.")
+		ltndLog.Warn("auto pilot (ATPL) initialized and started.")
 	}
 
 	addInterruptHandler(func() {
