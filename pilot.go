@@ -45,8 +45,6 @@ func (c *chanController) OpenChannel(target *btcec.PublicKey,
 	// First, we'll check if we're already connected to the target peer. If
 	// not, then we'll need to establish a connection.
 	if _, err := c.server.FindPeer(target); err != nil {
-		// TODO(roasbeef): try teach addr
-
 		atplLog.Tracef("Connecting to %x to auto-create channel: ",
 			target.SerializeCompressed())
 
@@ -59,6 +57,8 @@ func (c *chanController) OpenChannel(target *btcec.PublicKey,
 		// advertised IP addresses until we've either exhausted the
 		// advertised IP addresses, or have made a connection.
 		var connected bool
+
+		// We will try each address and go with the first one that connects us.
 		for _, addr := range addrs {
 			// If the address doesn't already have a port, then
 			// we'll assume the current default port.
@@ -77,6 +77,8 @@ func (c *chanController) OpenChannel(target *btcec.PublicKey,
 			// chan open?
 			err := c.server.ConnectToPeer(lnAddr, false)
 			if err != nil {
+				atplLog.Warnf("OpenChannel ConnectToPeer %s error %s", tcpAddr, err.Error())
+
 				// If we weren't able to connect to the peer,
 				// then we'll move onto the next.
 				continue
@@ -156,6 +158,14 @@ func (s *peerscannerServer) GetLnAddr(nodePubKey *btcec.PublicKey, addr net.Addr
 		Address:     tcpAddr,
 	}
 	return lnAddr, nil
+}
+
+func (s *peerscannerServer) UnspentWitnessOutputCount() (int, error) {
+	coins, err := s.server.cc.wallet.ListUnspentWitness(1)
+	if err != nil {
+		return 0, err
+	}
+	return len(coins), nil
 }
 
 // func (c *chanController) checkNodeConnectivity(self *btcec.PublicKey, graph autopilot.ChannelGraph) {
@@ -369,27 +379,32 @@ func initAutoPilot(svr *server, cfg *autoPilotConfig) (*autopilot.Agent, error) 
 	// initialized with the passed auto pilot configuration parameters.
 	//
 	minChanSize := svr.cc.wallet.Cfg.DefaultConstraints.DustLimit * 5
-	prefAttachmentMaxFundingAmount := maxFundingAmount
+	attachmentMaxFundingAmount := maxFundingAmount
 	cfgMaxFundAmt := btcutil.Amount(cfg.MaxFundingAmount)
 	if (cfgMaxFundAmt > 0) && (cfgMaxFundAmt < maxFundingAmount) {
-		prefAttachmentMaxFundingAmount = cfgMaxFundAmt
+		attachmentMaxFundingAmount = cfgMaxFundAmt
 	}
 
 	// TODO(roasbeef): switch here to dispatch specified heuristic
-	// prefAttachment := autopilot.NewConstrainedPrefAttachment(
-	prefAttachment := autopilot.NewHackyPrefAttachment(
-		minChanSize, prefAttachmentMaxFundingAmount,
-		uint16(cfg.MaxChannels), cfg.Allocation,
-	)
+	var attachmentHeuristic autopilot.AttachmentHeuristic
+	switch cfg.Heuristic {
+	default:
+		atplLog.Infof("will use default (prefattach) heuristic.")
+		attachmentHeuristic = autopilot.NewConstrainedPrefAttachment(minChanSize, attachmentMaxFundingAmount, uint16(cfg.MaxChannels), cfg.Allocation)
+	case "experimental":
+		atplLog.Infof("will use experimental attachment heuristic.")
+		attachmentHeuristic = autopilot.NewHackyPrefAttachment(minChanSize, attachmentMaxFundingAmount, uint16(cfg.MaxChannels), cfg.Allocation)
+	}
 
 	// With the heuristic itself created, we can now populate the remainder
 	// of the items that the autopilot agent needs to perform its duties.
 	self := svr.identityPriv.PubKey()
 	pilotCfg := autopilot.Config{
-		Self:           self,
-		Heuristic:      prefAttachment,
-		ChanController: &chanController{svr},
-		Server:         &peerscannerServer{svr},
+		Self:              self,
+		Heuristic:         attachmentHeuristic,
+		ChanController:    &chanController{svr},
+		PeerScanner:       cfg.PeerScanner,
+		PeerScannerServer: &peerscannerServer{svr},
 		WalletBalance: func() (btcutil.Amount, error) {
 			return svr.cc.wallet.ConfirmedBalance(1, true)
 		},

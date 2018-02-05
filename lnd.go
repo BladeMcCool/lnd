@@ -95,6 +95,8 @@ var (
 // defers created in the top-level scope of a main method aren't executed if
 // os.Exit() is called.
 func lndMain() error {
+	// ltndLog.Warnf("yeh here.00")
+
 	// Load the configuration, and parse any command line options. This
 	// function will also set up logging properly.
 	loadedConfig, err := loadConfig()
@@ -479,12 +481,14 @@ func lndMain() error {
 	// active, then we'll initialize a fresh instance of it and start it.
 	var pilot *autopilot.Agent
 	if cfg.Autopilot.Active {
+		ltndLog.Warnf("yeh here.1")
 		pilot, err := initAutoPilot(server, cfg.Autopilot)
 		if err != nil {
 			ltndLog.Errorf("unable to create autopilot agent: %v",
 				err)
 			return err
 		}
+		ltndLog.Warn("auto pilot (ATPL) about to start it")
 		if err := pilot.Start(); err != nil {
 			ltndLog.Errorf("unable to start autopilot agent: %v",
 				err)

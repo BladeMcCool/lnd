@@ -1414,6 +1414,8 @@ func coinSelect(feeRatePerWeight, amt btcutil.Amount,
 	for {
 		// First perform an initial round of coin selection to estimate
 		// the required fee.
+		walletLog.Warnf("coinselect about to call selectinputs for %s", amtNeeded)
+
 		totalSat, selectedUtxos, err := selectInputs(amtNeeded, coins)
 		if err != nil {
 			return nil, 0, err

@@ -59,6 +59,7 @@ var _ AttachmentHeuristic = (*ConstrainedPrefAttachment)(nil)
 // NOTE: This is a part of the AttachmentHeuristic interface.
 func (p *ConstrainedPrefAttachment) NeedMoreChans(channels []Channel,
 	funds btcutil.Amount) (btcutil.Amount, bool) {
+	log.Warnf("NeedMoreChans: whee1")
 
 	// If we're already over our maximum allowed number of channels, then
 	// we'll instruct the controller not to create any more channels.
@@ -66,6 +67,7 @@ func (p *ConstrainedPrefAttachment) NeedMoreChans(channels []Channel,
 		return 0, false
 	}
 
+	log.Warnf("NeedMoreChans: whee2")
 	// First, we'll tally up the total amount of funds that are currently
 	// present within the set of active channels.
 	var totalChanAllocation btcutil.Amount
@@ -85,6 +87,7 @@ func (p *ConstrainedPrefAttachment) NeedMoreChans(channels []Channel,
 	// indicate the controller should call Select to obtain a candidate set
 	// of channels to attempt to open.
 	needMore := fundsFraction < p.threshold
+	log.Warnf("NeedMoreChans: whee3")
 	if !needMore {
 		return 0, false
 	}
@@ -93,6 +96,7 @@ func (p *ConstrainedPrefAttachment) NeedMoreChans(channels []Channel,
 	// additional funds we should allocate towards channels.
 	targetAllocation := btcutil.Amount(float64(totalFunds) * p.threshold)
 	fundsAvailable := targetAllocation - totalChanAllocation
+	log.Warnf("NeedMoreChans: whee4")
 	return fundsAvailable, true
 }
 

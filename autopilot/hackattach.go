@@ -103,21 +103,6 @@ func (p *HackyPrefAttachment) NeedMoreChans(channels []Channel,
 	return fundsAvailable, true
 }
 
-// shuffleCandidates shuffles the set of candidate nodes for preferential
-// attachment in order to break any ordering already enforced by the sorted
-// order of the public key for each node. To shuffle the set of candidates, we
-// use a version of the Fisher–Yates shuffle algorithm.
-// func shuffleCandidates(candidates []NodeID) []NodeID {
-// 	shuffledNodes := make([]NodeID, len(candidates))
-// 	perm := prand.Perm(len(candidates))
-
-// 	for i, v := range perm {
-// 		shuffledNodes[v] = candidates[i]
-// 	}
-
-// 	return shuffledNodes
-// }
-
 // Select returns a candidate set of attachment directives that should be
 // executed based on the current internal state, the state of the channel
 // graph, the set of nodes we should exclude, and the amount of funds
@@ -150,65 +135,6 @@ func (p *HackyPrefAttachment) Select(self *btcec.PublicKey, g ChannelGraph,
 		return directives, nil
 	}
 
-	//which nodes that are not us that are arent already connected to CAN we connect to?
-	// target *btcec.PublicKey
-	// 	if _, err := c.server.FindPeer(target); err != nil {
-
-	////////////
-	// OpenChannel(target *btcec.PublicKey,
-	// amt btcutil.Amount, addrs []net.Addr) error {
-
-	// // We can't establish a channel if no addresses were provided for the
-	// // peer.
-	// if len(addrs) == 0 {
-	// 	return fmt.Errorf("Unable to create channel w/o an active " +
-	// 		"address")
-	// }
-
-	// // First, we'll check if we're already connected to the target peer. If
-	// // not, then we'll need to establish a connection.
-	// if _, err := c.server.FindPeer(target); err != nil {
-	// 	// TODO(roasbeef): try teach addr
-
-	// 	atplLog.Tracef("Connecting to %x to auto-create channel: ",
-	// 		target.SerializeCompressed())
-
-	// 	lnAddr := &lnwire.NetAddress{
-	// 		IdentityKey: target,
-	// 		ChainNet:    activeNetParams.Net,
-	// 	}
-
-	// 	// We'll attempt to successively connect to each of the
-	// 	// advertised IP addresses until we've either exhausted the
-	// 	// advertised IP addresses, or have made a connection.
-	// 	var connected bool
-	// 	for _, addr := range addrs {
-	// 		// If the address doesn't already have a port, then
-	// 		// we'll assume the current default port.
-	// 		tcpAddr, ok := addr.(*net.TCPAddr)
-	// 		if !ok {
-	// 			return fmt.Errorf("TCP address required instead "+
-	// 				"have %T", addr)
-	// 		}
-	// 		if tcpAddr.Port == 0 {
-	// 			tcpAddr.Port = defaultPeerPort
-	// 		}
-
-	// 		lnAddr.Address = tcpAddr
-
-	// 		// TODO(roasbeef): make perm connection in server after
-	// 		// chan open?
-	// 		err := c.server.ConnectToPeer(lnAddr, false)
-	// 		if err != nil {
-	// 			// If we weren't able to connect to the peer,
-	// 			// then we'll move onto the next.
-	// 			continue
-	// 		}
-
-	// 		connected = true
-	// 		break
-	// }
-
 	// selectionSlice will be used to randomly select a node
 	// according to a power law distribution. For each connected
 	// edge, we'll add an instance of the node to this slice. Thus,
@@ -223,7 +149,7 @@ func (p *HackyPrefAttachment) Select(self *btcec.PublicKey, g ChannelGraph,
 
 	var selectionSlice []NodeID
 	var idToNode = make(map[NodeID]Node)
-	var nodeWeightsByNodeID = make(map[NodeID]btcutil.Amount)
+	// var nodeWeightsByNodeID = make(map[NodeID]btcutil.Amount)
 
 	// For each node, and each channel that the node has, we'll add
 	// an instance of that node to the selection slice above.
@@ -241,7 +167,7 @@ func (p *HackyPrefAttachment) Select(self *btcec.PublicKey, g ChannelGraph,
 			return nil
 		}
 
-		// Additionally, if this node is in the backlist, then
+		// Additionally, if this node is in the blacklist, then
 		// we'll skip it.
 		if _, ok := skipNodes[nID]; ok {
 			return nil
@@ -255,7 +181,7 @@ func (p *HackyPrefAttachment) Select(self *btcec.PublicKey, g ChannelGraph,
 		//
 		// TODO(roasbeef): make conditional?
 		selectionSlice = append(selectionSlice, nID)
-		nodeWeightsByNodeID[nID] += p.maxChanSize //basic weight for existing. the bigger channels we plan to open, i guess the more important randos existence is?
+		// nodeWeightsByNodeID[nID] += p.maxChanSize //basic weight for existing. the bigger channels we plan to open, i guess the more important randos existence is?
 
 		// For each active channel the node has, we'll add an
 		// additional channel to the selection slice to
@@ -270,7 +196,7 @@ func (p *HackyPrefAttachment) Select(self *btcec.PublicKey, g ChannelGraph,
 			}
 
 			selectionSlice = append(selectionSlice, nID)
-			nodeWeightsByNodeID[nID] += channel.Capacity
+			// nodeWeightsByNodeID[nID] += channel.Capacity
 
 			return nil
 		}); err != nil {
@@ -285,17 +211,18 @@ func (p *HackyPrefAttachment) Select(self *btcec.PublicKey, g ChannelGraph,
 		return directives, nil
 	}
 
-	type weightedNode struct {
-		Weight btcutil.Amount //its just an int64 and now i dont have to typeassert(?is that the right term)
-		NodeID NodeID
-	}
-	nodeWeights := make([]weightedNode, len(nodeWeightsByNodeID))
-	nodeInd := 0
-	totalWeight := btcutil.Amount(0)
-	for nID, weight := range nodeWeightsByNodeID {
-		totalWeight += weight
-		nodeWeights[nodeInd] = weightedNode{weight, nID}
-	}
+	// type weightedNode struct {
+	// 	Weight btcutil.Amount //its just an int64 and now i dont have to typeassert(?is that the right term)
+	// 	NodeID NodeID
+	// }
+	// nodeWeights := make([]weightedNode, len(nodeWeightsByNodeID))
+	// nodeInd := 0
+
+	// totalWeight := btcutil.Amount(0)
+	// for nID, weight := range nodeWeightsByNodeID {
+	// 	totalWeight += weight
+	// 	nodeWeights[nodeInd] = weightedNode{weight, nID}
+	// }
 
 	// func RandomWeightedSelect(games []Game, totalWeight int) (Game, error) {
 	//     r := prand.Intn(totalWeight)
@@ -309,8 +236,19 @@ func (p *HackyPrefAttachment) Select(self *btcec.PublicKey, g ChannelGraph,
 	// }
 
 	//shuffle and pull out unique selected nodes up to the number we need or we run out.
-	// candidateNodeIds := shuffleCandidates(selectionSlice)
-	candidateNodeIds := []NodeID{}
+	shuffler := func(candidates []NodeID) []NodeID {
+		shuffledNodes := make([]NodeID, len(candidates))
+		perm := prand.Perm(len(candidates))
+		for i, v := range perm {
+			shuffledNodes[v] = candidates[i]
+		}
+		return shuffledNodes
+	}
+
+	candidateNodeIds := shuffler(selectionSlice)
+	log.Warnf("Select: should try to get %d unique nodes out of %d shuffled weighted candidateNodeIds.", numChansToOpen, len(candidateNodeIds))
+
+	// candidateNodeIds := []NodeID{}
 	visited := make(map[NodeID]struct{})
 	candidateCount := 0
 	for _, nID := range candidateNodeIds {
@@ -346,12 +284,13 @@ func (p *HackyPrefAttachment) Select(self *btcec.PublicKey, g ChannelGraph,
 	numSelectedNodes := int64(len(directives))
 	log.Warnf("Select: prepared %d attachment directives to attempt at this time.", numSelectedNodes)
 
-	var debuggg = true
+	var debuggg = false
 	if debuggg {
 		log.Warnf("Select: DEBUG ACTUALLY DONT RETURN ANY DIRECTIVES!!")
 		return directives, nil
 	}
 
+	///TODO maybe this can be shared code somehow because it is copypasta from the prefattach.
 	switch {
 	// If we have enough available funds to distribute the maximum channel
 	// size for each of the selected peers to attach to, then we'll

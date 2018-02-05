@@ -159,4 +159,5 @@ type PeerScannerServer interface {
 	ConnectToPeer(*lnwire.NetAddress, bool) error
 	DisconnectPeer(*btcec.PublicKey) error
 	GetLnAddr(*btcec.PublicKey, net.Addr) (*lnwire.NetAddress, error)
+	UnspentWitnessOutputCount() (int, error)
 }

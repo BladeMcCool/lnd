@@ -1639,7 +1639,7 @@ func (s *server) ConnectToPeer(addr *lnwire.NetAddress, perm bool) error {
 	// If there's not already a pending or active connection to this node,
 	// then instruct the connection manager to attempt to establish a
 	// persistent connection to the peer.
-	srvrLog.Warnf("Connecting to %v", addr)
+	srvrLog.Warnf("Connecting (perm: %t) to %v", perm, addr)
 	if perm {
 		connReq := &connmgr.ConnReq{
 			Addr:      addr,

@@ -33,7 +33,9 @@ type Config struct {
 	// ChanController is an interface that is able to directly manage the
 	// creation, closing and update of channels within the network.
 	ChanController ChannelController
-	Server         PeerScannerServer //cuz i didnt want to jam these methods into ChanController.
+
+	PeerScanner       bool
+	PeerScannerServer PeerScannerServer //cuz i didnt want to jam these methods into ChanController.
 	// WalletBalance is a function closure that should return the current
 	// available balance o the backing wallet.
 	WalletBalance func() (btcutil.Amount, error)
@@ -113,6 +115,7 @@ type Agent struct {
 
 	connectableNodeAddressesLock sync.Mutex
 	connectableNodeAddresses     *[]nodeAddrConnectability
+	unconnectableNodes           *map[NodeID]struct{}
 }
 
 // NodeID is a simple type that holds a EC public key serialized in compressed
@@ -179,6 +182,10 @@ func (a *Agent) Stop() error {
 	a.wg.Wait()
 
 	return nil
+}
+
+func (a *Agent) WakeUp() {
+	a.stateUpdates <- &noopWakeup{}
 }
 
 // balanceUpdate is a type of external state update that reflects an
@@ -251,10 +258,11 @@ func (a *Agent) OnChannelClose(closedChans ...lnwire.ShortChannelID) {
 // channels open to, with the set of nodes that are pending new channels. This
 // ensures that the Agent doesn't attempt to open any "duplicate" channels to
 // the same node.
-func mergeNodeMaps(a map[NodeID]struct{}, b map[NodeID]struct{},
-	c map[NodeID]Channel) map[NodeID]struct{} {
+// plus merge unconnectable nodes as well.
+func mergeNodeMaps(a map[NodeID]struct{}, b map[NodeID]struct{}, c map[NodeID]struct{},
+	d map[NodeID]Channel) map[NodeID]struct{} {
 
-	res := make(map[NodeID]struct{}, len(a)+len(b)+len(c))
+	res := make(map[NodeID]struct{}, len(a)+len(b)+len(c)+len(d))
 	for nodeID := range a {
 		res[nodeID] = struct{}{}
 	}
@@ -262,6 +270,9 @@ func mergeNodeMaps(a map[NodeID]struct{}, b map[NodeID]struct{},
 		res[nodeID] = struct{}{}
 	}
 	for nodeID := range c {
+		res[nodeID] = struct{}{}
+	}
+	for nodeID := range d {
 		res[nodeID] = struct{}{}
 	}
 
@@ -313,14 +324,17 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 	// channel limit, or open multiple channels to the same node.
 	pendingOpens := make(map[NodeID]Channel)
 	var pendingMtx sync.Mutex
-
+	var lastAwoken = time.Now().UTC()
+	var minIdleSeconds = int64(10 * 60)
 	// 10-minute wake up timer
 	go func() {
 		for {
-			time.Sleep(10 * time.Minute)
-			// time.Sleep(10 * time.Second)
-			log.Warnf("Sending noop wakeup")
-			a.stateUpdates <- &noopWakeup{}
+			time.Sleep(time.Duration(minIdleSeconds) * time.Second)
+			if int64((time.Since(lastAwoken) / time.Second)) < minIdleSeconds {
+				//if something else woke us while we were sleeping then sleep again for now.
+				continue
+			}
+			a.WakeUp()
 		}
 	}()
 	for {
@@ -329,7 +343,7 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 		// our internal state, then determine if we should trigger a
 		// channel state modification (open/close, splice in/out).
 		case signal := <-a.stateUpdates:
-			log.Infof("Processing new external signal")
+			log.Warnf("MSG Processing new external signal")
 			checkIfMoreChansNeeded := false
 			switch update := signal.(type) {
 			// The balance of the backing wallet has changed, if
@@ -337,22 +351,22 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 			// up an additional channel, or splice in funds to an
 			// existing one.
 			case *balanceUpdate:
-				log.Debugf("Applying external balance state "+
+				log.Warnf("MSG Applying external balance state "+
 					"update of: %v", update.balanceDelta)
 
 				a.totalBalance += update.balanceDelta
-				checkIfMoreChansNeeded = true
+				// checkIfMoreChansNeeded = true
 
 			// The channel we tried to open previously failed for
 			// whatever reason.
 			case *chanOpenFailureUpdate:
-				log.Debug("Retrying (or not??) after previous channel open failure.")
+				log.Warnf("MSG Retrying (or not??) after previous channel open failure.")
 
 			// A new channel has been opened successfully. This was
 			// either opened by the Agent, or an external system
 			// that is able to drive the Lightning Node.
 			case *chanOpenUpdate:
-				log.Debugf("New channel successfully opened, "+
+				log.Warnf("MSG New channel successfully opened, "+
 					"updating state with: %v",
 					spew.Sdump(update.newChan))
 
@@ -366,29 +380,23 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 			// A channel has been closed, this may free up an
 			// available slot, triggering a new channel update.
 			case *chanCloseUpdate:
-				log.Debugf("Applying closed channel "+
+				log.Warnf("MSG Applying closed channel "+
 					"updates: %v",
 					spew.Sdump(update.closedChans))
 
 				for _, closedChan := range update.closedChans {
 					delete(a.chanState, closedChan)
 				}
-				checkIfMoreChansNeeded = true
+				// checkIfMoreChansNeeded = true
 
 			case *noopWakeup:
-				log.Warnf("Noop Wake-up")
+				log.Warnf("MSG Noop Wake-up")
+				lastAwoken = time.Now().UTC()
 				checkIfMoreChansNeeded = true
-
 			}
 
 			if !checkIfMoreChansNeeded {
 				log.Warnf("Not checking if we need to make more chans at the moment.")
-				continue
-			}
-
-			//TODO only do this check if are using the peer scanner.
-			if a.connectableNodeAddresses == nil {
-				log.Warnf("Doesn't think we know about any peers to open channels with anyway so whats the point :(")
 				continue
 			}
 
@@ -401,10 +409,24 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 			totalChans := mergeChanState(pendingOpens, confirmedChans)
 			pendingMtx.Unlock()
 
+			var unconnctableNodes *map[NodeID]struct{}
+			if a.cfg.PeerScanner {
+				unconnctableNodes = a.getUnconnectableNodesMap()
+				if unconnctableNodes == nil {
+					log.Warnf("Peer scanning is on and we do not think we know about any other peers to open channels with anyway so whats the point :(")
+					continue
+				}
+			} else {
+				unconnctableNodes = &map[NodeID]struct{}{}
+			}
+			log.Warnf("unconnectable nodes count: %d", len(*unconnctableNodes))
+			// for unconnectableNodeID := range unconnctableNodes {
+
 			// Now that we've updated our internal state, we'll
 			// consult our channel attachment heuristic to
 			// determine if we should open up any additional
 			// channels or modify existing channels.
+			log.Warnf("Determine if more chans needed ...")
 			availableFunds, needMore := a.cfg.Heuristic.NeedMoreChans(
 				totalChans, a.totalBalance,
 			)
@@ -413,19 +435,18 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 				continue
 			}
 
-			log.Infof("Triggering attachment directive dispatch")
+			log.Warnf("Triggering attachment directive dispatch")
 
 			// We're to attempt an attachment so we'll o obtain the
 			// set of nodes that we currently have channels with so
 			// we avoid duplicate edges.
 			connectedNodes := a.chanState.ConnectedNodes()
 			pendingMtx.Lock()
-			nodesToSkip := mergeNodeMaps(connectedNodes, failedNodes, pendingOpens)
+			nodesToSkip := mergeNodeMaps(connectedNodes, failedNodes, *unconnctableNodes, pendingOpens)
 			pendingMtx.Unlock()
 
 			// err := a.cfg.ChanController.CheckNodeConnectivity(a.cfg.Self, a.cfg.Graph)
-			log.Warnf("Autopilot debug bail early.")
-			continue
+			// continue
 
 			// If we reach this point, then according to our
 			// heuristic we should modify our channel state to tend
@@ -433,6 +454,7 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 			// we'll call Select to get a fresh batch of attachment
 			// directives, passing in the amount of funds available
 			// for us to use.
+			log.Warnf("Select candidates with chosen heuristic ...")
 			chanCandidates, err := a.cfg.Heuristic.Select(
 				a.cfg.Self, a.cfg.Graph, availableFunds,
 				nodesToSkip,
@@ -447,6 +469,19 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 			if len(chanCandidates) == 0 {
 				log.Warnf("No eligible candidates to connect to")
 				continue
+			}
+			if a.cfg.PeerScanner {
+				//because peerscanner is going to leave us only with peers that we are very confident we will be able to actually open a channel to, we should limit the number of directives we try
+				//to match the number of outputs the wallet has since each channel will need at least one output and we expect these all to succeed.
+				availableOutputCount, err := a.cfg.PeerScannerServer.UnspentWitnessOutputCount()
+				if err != nil {
+					log.Warnf("Got err from trying to get a count of unspent witness outputs: %s", err.Error())
+					continue
+				}
+				if len(chanCandidates) > availableOutputCount {
+					chanCandidates = chanCandidates[:availableOutputCount]
+					log.Warnf("Reducing directives down to the first %d to match number of outputs for chan creation.", len(chanCandidates))
+				}
 			}
 
 			log.Warnf("Attempting to execute channel attachment "+
@@ -556,7 +591,7 @@ func (a *Agent) checkNodeConnectivity() {
 			connectorChan <- addr
 			//sleep to not hammer.
 			diong++
-			log.Warnf("added %s to connectorChan (%d/%d)", addr.addr, diong, totalAddress)
+			// log.Warnf("added %s to connectorChan (%d/%d)", addr.addr, diong, totalAddress)
 			// time.Sleep(100 * time.Millisecond)
 		}
 		close(connectorChan)
@@ -564,26 +599,32 @@ func (a *Agent) checkNodeConnectivity() {
 	//another goroutine to execute that
 
 	expectResults := int64(0)
+	bailAfterExpectResults := int64(0)
 	go func() {
 		wg := sync.WaitGroup{}
 
 		connectAtOnce := 25 //TODO make this config'able.
 		wg.Add(connectAtOnce)
 		workAccepted := int64(0)
-		server := a.cfg.Server
+		server := a.cfg.PeerScannerServer
 
 		for k := 0; k < connectAtOnce; k++ {
 			go func() {
 				defer wg.Done()
 				for addr := range connectorChan {
 					atomic.AddInt64(&workAccepted, 1)
+					if (bailAfterExpectResults > 0) && (expectResults >= bailAfterExpectResults) {
+						log.Warnf("bailing after finding %d that we can talk to (DEBUG)", expectResults)
+						return
+					}
+
 					// // First, we'll check if we're already connected to the target peer. If
 					// // not, then we'll need to establish a connection.
 					nodePubKey := addr.node.PubKey()
 					addr.startedAt = time.Now().UTC()
 
 					if server.ConnectedToNode(nodePubKey) {
-						log.Warnf("already connected to %s (cool!)", addr.addr)
+						log.Warnf("already connected to the node (%x) that owns %s (cool!)", addr.nID, addr.addr)
 						continue
 					}
 
@@ -617,7 +658,11 @@ func (a *Agent) checkNodeConnectivity() {
 						continue
 					}
 					addr.succeded = true
-					log.Warnf("WOOTWOOT actually connected to %s", lnAddr.Address)
+					//TODO: figure out how to deal with this error that we see from some peers when trying to open channels later ..
+					//    "rpc error: code = Code(208) desc = local/remote feerates are too different"
+					//    seems to be a c-lightning thing. (see https://github.com/ElementsProject/lightning/issues/443)
+					//    ideally i'd like to be able to determine that the policies are mismatched right here so that we know not to bother with this peer.
+					log.Warnf("WOOTWOOT actually connected to %s (result #%d)", lnAddr.Address, expectResults+1)
 
 					err = server.DisconnectPeer(nodePubKey)
 					if err != nil {
@@ -648,7 +693,7 @@ func (a *Agent) checkNodeConnectivity() {
 				if v.started && !v.finished {
 					activeCount += 1
 					runningFor := time.Since(v.startedAt) / time.Millisecond
-					log.Warnf("REPORTER connection task %d running for %d msec (%s)", v.count, runningFor, v.addr)
+					log.Warnf("REPORTER connection task %d/%d running for %d msec (%s)", v.count, totalAddress, runningFor, v.addr)
 				}
 			}
 			log.Warnf("REPORTER believes %d connection attempts are currently actively being waited on, finsiehd %d/%d", activeCount, finished, totalAddress)
@@ -681,8 +726,16 @@ func (a *Agent) checkNodeConnectivity() {
 	log.Warnf("that was a total %d nodes with addresses, total of addresses %d", nodesWithAddr, totalAddress)
 
 	connectableNodeAddresses := make([]nodeAddrConnectability, connectable)
-	for i, v := range nodeAddresseFlat {
-		connectableNodeAddresses[i] = *v
+	unconnectableNodes := map[NodeID]struct{}{}
+	connectableIndex := 0
+	for _, v := range nodeAddresseFlat {
+		if !v.succeded {
+			unconnectableNodes[v.nID] = struct{}{}
+			continue
+		}
+		connectableNodeAddresses[connectableIndex] = *v
+		connectableIndex++
+		delete(unconnectableNodes, v.nID) //just in case we added the node to unconnectables because one of its other addresses could not connect to.
 	}
 
 	// log.Warnf("now go to sleep little baby.")
@@ -690,8 +743,11 @@ func (a *Agent) checkNodeConnectivity() {
 
 	a.connectableNodeAddressesLock.Lock()
 	a.connectableNodeAddresses = &connectableNodeAddresses
+	a.unconnectableNodes = &unconnectableNodes
 	a.connectableNodeAddressesLock.Unlock()
 
+	//if we were doing this peer scanning then our autopilot wakeups should come from here
+	a.WakeUp()
 	return
 	// return connectableNodeAddresses, nil
 }
@@ -701,8 +757,17 @@ func (a *Agent) getConnectableNodesList() *[]nodeAddrConnectability {
 	defer a.connectableNodeAddressesLock.Unlock()
 	return a.connectableNodeAddresses
 }
+func (a *Agent) getUnconnectableNodesMap() *map[NodeID]struct{} {
+	a.connectableNodeAddressesLock.Lock()
+	defer a.connectableNodeAddressesLock.Unlock()
+	return a.unconnectableNodes
+}
 
 func (a *Agent) startPeerScanner() {
+	if !a.cfg.PeerScanner {
+		return
+	}
+
 	go func() {
 		a.checkNodeConnectivity()
 		log.Warnf("peerscanner sleeping for a while before running again.")

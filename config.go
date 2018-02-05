@@ -62,6 +62,8 @@ const (
 
 	defaultAlias = ""
 	defaultColor = "#3399FF"
+
+	defaultAutoPilotHeuristic = "prefattach"
 )
 
 var (
@@ -132,6 +134,8 @@ type autoPilotConfig struct {
 	MaxChannels      int     `long:"maxchannels" description:"The maximum number of channels that should be created"`
 	Allocation       float64 `long:"allocation" description:"The percentage of total funds that should be committed to automatic channel establishment"`
 	MaxFundingAmount int64   `long:"maxfundingamount" description:"Max satoshis to allocate per new channel that is made"`
+	Heuristic        string  `long:"heuristic" description:"prefattach (default) or experimental"`
+	PeerScanner      bool    `long:"peerscanner" description:"scan the graph for peers with connectable addresses and attempt to connect/disconnect from each one, maintaining a periodically updated short list of nodes that we think we can actually talk to for autopilot node selection."`
 }
 
 // config defines the configuration options for lnd.
@@ -234,6 +238,7 @@ func loadConfig() (*config, error) {
 		Autopilot: &autoPilotConfig{
 			MaxChannels: 5,
 			Allocation:  0.6,
+			Heuristic:   defaultAutoPilotHeuristic,
 		},
 		TrickleDelay: defaultTrickleDelay,
 		Alias:        defaultAlias,
