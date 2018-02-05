@@ -240,6 +240,11 @@ type fundingConfig struct {
 	// the channel to the ChainArbitrator so it can watch for any on-chain
 	// events related to the channel.
 	WatchNewChannel func(*channeldb.OpenChannel) error
+
+	// ReportShortChanID allows the funding manager to report the newly
+	// discovered short channel ID of a formerly pending channel to outside
+	// sub-systems.
+	ReportShortChanID func(wire.OutPoint, lnwire.ShortChannelID) error
 }
 
 // fundingManager acts as an orchestrator/bridge between the wallet's
@@ -457,7 +462,8 @@ func (f *fundingManager) Start() error {
 			&channel.FundingOutpoint)
 		if err == ErrChannelNotFound {
 			// Channel not in fundingManager's opening database,
-			// meaning it was successully announced to the network.
+			// meaning it was successfully announced to the
+			// network.
 			continue
 		} else if err != nil {
 			return err
@@ -467,14 +473,16 @@ func (f *fundingManager) Start() error {
 		fndgLog.Debugf("channel (%v) with opening state %v found",
 			chanID, channelState)
 
-		// Set up the channel barriers again, to make sure
-		// waitUntilChannelOpen correctly waits until the opening
-		// process is completely over.
-		f.barrierMtx.Lock()
-		fndgLog.Tracef("Loading pending ChannelPoint(%v), "+
-			"creating chan barrier", channel.FundingOutpoint)
-		f.newChanBarriers[chanID] = make(chan struct{})
-		f.barrierMtx.Unlock()
+		if channel.IsPending {
+			// Set up the channel barriers again, to make sure
+			// waitUntilChannelOpen correctly waits until the
+			// opening process is completely over.
+			f.barrierMtx.Lock()
+			fndgLog.Tracef("Loading pending ChannelPoint(%v), "+
+				"creating chan barrier", channel.FundingOutpoint)
+			f.newChanBarriers[chanID] = make(chan struct{})
+			f.barrierMtx.Unlock()
+		}
 
 		// If we did find the channel in the opening state database, we
 		// have seen the funding transaction being confirmed, but we
@@ -1208,8 +1216,8 @@ func (f *fundingManager) handleFundingCreated(fmsg *fundingCreatedMsg) {
 	// send it to the ChainArbitrator so it can watch for any on-chain
 	// actions during this final confirmation stage.
 	if err := f.cfg.WatchNewChannel(completeChan); err != nil {
-		fndgLog.Error("Unable to send new ChannelPoint(%v) for "+
-			"arbitration", fundingOut)
+		fndgLog.Errorf("Unable to send new ChannelPoint(%v) for "+
+			"arbitration: %v", fundingOut, err)
 	}
 
 	// Create an entry in the local discovery map so we can ensure that we
@@ -1348,7 +1356,7 @@ func (f *fundingManager) handleFundingSigned(fmsg *fundingSignedMsg) {
 	// confirmed.
 	if err := f.cfg.WatchNewChannel(completeChan); err != nil {
 		fndgLog.Errorf("Unable to send new ChannelPoint(%v) for "+
-			"arbitration", fundingPoint)
+			"arbitration: %v", fundingPoint, err)
 	}
 
 	fndgLog.Infof("Finalizing pendingID(%x) over ChannelPoint(%v), "+
@@ -1610,9 +1618,9 @@ func (f *fundingManager) waitForFundingConfirmation(completeChan *channeldb.Open
 	// should be abstracted
 
 	// The funding transaction now being confirmed, we add this channel to
-	// the fundingManager's internal persistant state machine that we use
-	// to track the remaining process of the channel opening. This is useful
-	// to resume the opening process in case of restarts.
+	// the fundingManager's internal persistent state machine that we use
+	// to track the remaining process of the channel opening. This is
+	// useful to resume the opening process in case of restarts.
 	//
 	// TODO(halseth): make the two db transactions (MarkChannelAsOpen and
 	// saveChannelOpeningState) atomic by doing them in the same transaction.
@@ -1623,6 +1631,13 @@ func (f *fundingManager) waitForFundingConfirmation(completeChan *channeldb.Open
 		fndgLog.Errorf("error setting channel state to markedOpen: %v",
 			err)
 		return
+	}
+
+	// As there might already be an active link in the switch with an
+	// outdated short chan ID, we'll update it now.
+	err = f.cfg.ReportShortChanID(fundingPoint, shortChanID)
+	if err != nil {
+		fndgLog.Errorf("unable to report short chan id: %v", err)
 	}
 
 	select {
