@@ -132,6 +132,8 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 
 	listeners := make([]net.Listener, len(listenAddrs))
 	for i, addr := range listenAddrs {
+		// Note: though brontide.NewListener uses ResolveTCPAddr, it doesn't need to call the
+		// general lndResolveTCP function since we are resolving a local address.
 		listeners[i], err = brontide.NewListener(privKey, addr)
 		if err != nil {
 			return nil, err
@@ -214,7 +216,9 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 	})
 
 	// If external IP addresses have been specified, add those to the list
-	// of this server's addresses.
+	// of this server's addresses. We need to use the cfg.net.ResolveTCPAddr
+	// function in case we wish to resolve hosts over Tor since domains
+	// CAN be passed into the ExternalIPs configuration option.
 	selfAddrs := make([]net.Addr, 0, len(cfg.ExternalIPs))
 	for _, ip := range cfg.ExternalIPs {
 		var addr string
@@ -225,7 +229,7 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 			addr = ip
 		}
 
-		lnAddr, err := net.ResolveTCPAddr("tcp", addr)
+		lnAddr, err := cfg.net.ResolveTCPAddr("tcp", addr)
 		if err != nil {
 			return nil, err
 		}
@@ -603,6 +607,8 @@ func initNetworkBootstrappers(s *server) ([]discovery.NetworkPeerBootstrapper, e
 
 			dnsBootStrapper, err := discovery.NewDNSSeedBootstrapper(
 				dnsSeeds,
+				cfg.net.LookupHost,
+				cfg.net.LookupSRV,
 			)
 			if err != nil {
 				return nil, err
@@ -645,7 +651,7 @@ func (s *server) peerBootstrapper(numTargetPeers uint32,
 	// below to sample how many of these connections succeeded.
 	for _, addr := range bootStrapAddrs {
 		go func(a *lnwire.NetAddress) {
-			conn, err := brontide.Dial(s.identityPriv, a)
+			conn, err := brontide.Dial(s.identityPriv, a, cfg.net.Dial)
 			if err != nil {
 				srvrLog.Errorf("unable to connect to %v: %v",
 					a, err)
@@ -755,7 +761,8 @@ func (s *server) peerBootstrapper(numTargetPeers uint32,
 				go func(a *lnwire.NetAddress) {
 					// TODO(roasbeef): can do AS, subnet,
 					// country diversity, etc
-					conn, err := brontide.Dial(s.identityPriv, a)
+					conn, err := brontide.Dial(s.identityPriv,
+						a, cfg.net.Dial)
 					if err != nil {
 						srvrLog.Errorf("unable to connect "+
 							"to %v: %v", a, err)
@@ -809,7 +816,7 @@ func (s *server) genNodeAnnouncement(
 
 type nodeAddresses struct {
 	pubKey    *btcec.PublicKey
-	addresses []*net.TCPAddr
+	addresses []net.Addr
 }
 
 // establishPersistentConnections attempts to establish persistent connections
@@ -832,9 +839,13 @@ func (s *server) establishPersistentConnections() error {
 	}
 	for _, node := range linkNodes {
 		for _, address := range node.Addresses {
-			if address.Port == 0 {
-				address.Port = defaultPeerPort
+			switch addr := address.(type) {
+			case *net.TCPAddr:
+				if addr.Port == 0 {
+					addr.Port = defaultPeerPort
+				}
 			}
+
 		}
 		pubStr := string(node.IdentityPub.SerializeCompressed())
 
@@ -866,14 +877,19 @@ func (s *server) establishPersistentConnections() error {
 		// list of addresses we'll connect to. If there are duplicates
 		// that have different ports specified, the port from the
 		// channel graph should supersede the port from the link node.
-		var addrs []*net.TCPAddr
+		var addrs []net.Addr
 		linkNodeAddrs, ok := nodeAddrsMap[pubStr]
 		if ok {
 			for _, lnAddress := range linkNodeAddrs.addresses {
+				lnAddrTCP, ok := lnAddress.(*net.TCPAddr)
+				if !ok {
+					continue
+				}
+
 				var addrMatched bool
 				for _, polAddress := range policy.Node.Addresses {
 					polTCPAddr, ok := polAddress.(*net.TCPAddr)
-					if ok && polTCPAddr.IP.Equal(lnAddress.IP) {
+					if ok && polTCPAddr.IP.Equal(lnAddrTCP.IP) {
 						addrMatched = true
 						addrs = append(addrs, polTCPAddr)
 					}
@@ -1274,7 +1290,7 @@ func (s *server) peerConnected(conn net.Conn, connReq *connmgr.ConnReq,
 	brontideConn := conn.(*brontide.Conn)
 	peerAddr := &lnwire.NetAddress{
 		IdentityKey: brontideConn.RemotePub(),
-		Address:     conn.RemoteAddr().(*net.TCPAddr),
+		Address:     conn.RemoteAddr(),
 		ChainNet:    activeNetParams.Net,
 	}
 
@@ -1661,7 +1677,7 @@ func (s *server) ConnectToPeer(addr *lnwire.NetAddress, perm bool) error {
 	// connect to the target peer. If the we can't make the connection, or
 	// the crypto negotiation breaks down, then return an error to the
 	// caller.
-	conn, err := brontide.Dial(s.identityPriv, addr)
+	conn, err := brontide.Dial(s.identityPriv, addr, cfg.net.Dial)
 	if err != nil {
 		return err
 	}

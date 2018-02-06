@@ -32,11 +32,12 @@ var _ net.Conn = (*Conn)(nil)
 // remote peer located at address which has remotePub as its long-term static
 // public key. In the case of a handshake failure, the connection is closed and
 // a non-nil error is returned.
-func Dial(localPriv *btcec.PrivateKey, netAddr *lnwire.NetAddress) (*Conn, error) {
+func Dial(localPriv *btcec.PrivateKey, netAddr *lnwire.NetAddress,
+	dialer func(string, string) (net.Conn, error)) (*Conn, error) {
 	ipAddr := netAddr.Address.String()
-	dialer := net.Dialer{Timeout: 15 * time.Second}
-	conn, err := dialer.Dial("tcp", ipAddr)
-	// conn, err := net.Dial("tcp", ipAddr)
+	var conn net.Conn
+	var err error
+	conn, err = dialer("tcp", ipAddr)
 	if err != nil {
 		return nil, err
 	}

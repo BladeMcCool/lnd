@@ -20,6 +20,7 @@ import (
 	flags "github.com/jessevdk/go-flags"
 	"github.com/lightningnetwork/lnd/brontide"
 	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/lightningnetwork/lnd/torsvc"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcutil"
 )
@@ -138,6 +139,11 @@ type autoPilotConfig struct {
 	PeerScanner      bool    `long:"peerscanner" description:"scan the graph for peers with connectable addresses and attempt to connect/disconnect from each one, maintaining a periodically updated short list of nodes that we think we can actually talk to for autopilot node selection."`
 }
 
+type torConfig struct {
+	Socks string `long:"socks" description:"The port that Tor's exposed SOCKS5 proxy is listening on. Using Tor allows outbound-only connections (listening will be disabled) -- NOTE port must be between 1024 and 65535"`
+	DNS   string `long:"dns" description:"The DNS server as IP:PORT that Tor will use for SRV queries - NOTE must have TCP resolution enabled"`
+}
+
 // config defines the configuration options for lnd.
 //
 // See loadConfig for further details regarding the configuration
@@ -164,7 +170,7 @@ type config struct {
 
 	CPUProfile string `long:"cpuprofile" description:"Write CPU profile to the specified file"`
 
-	Profile string `long:"profile" description:"Enable HTTP profiling on given port -- NOTE port must be between 1024 and 65536"`
+	Profile string `long:"profile" description:"Enable HTTP profiling on given port -- NOTE port must be between 1024 and 65535"`
 
 	DebugHTLC          bool `long:"debughtlc" description:"Activate the debug htlc mode. With the debug HTLC mode, all payments sent use a pre-determined R-Hash. Additionally, all HTLCs sent to a node with the debug HTLC R-Hash are immediately settled in the next available state transition."`
 	HodlHTLC           bool `long:"hodlhtlc" description:"Activate the hodl HTLC mode.  With hodl HTLC mode, all incoming HTLCs will be accepted by the receiving node, but no attempt will be made to settle the payment with the sender."`
@@ -180,6 +186,8 @@ type config struct {
 
 	Autopilot *autoPilotConfig `group:"autopilot" namespace:"autopilot"`
 
+	Tor *torConfig `group:"Tor" namespace:"tor"`
+
 	NoNetBootstrap bool `long:"nobootstrap" description:"If true, then automatic network bootstrapping will not be attempted."`
 
 	NoEncryptWallet bool `long:"noencryptwallet" description:"If set, wallet will be encrypted using the default passphrase."`
@@ -188,6 +196,8 @@ type config struct {
 
 	Alias string `long:"alias" description:"The node alias. Used as a moniker by peers and intelligence services"`
 	Color string `long:"color" description:"The color of the node in hex format (i.e. '#3399FF'). Used to customize node appearance in intelligence services"`
+
+	net torsvc.Net
 }
 
 // loadConfig initializes and parses the config using a config file and command
@@ -290,6 +300,51 @@ func loadConfig() (*config, error) {
 	// Finally, parse the remaining command line options again to ensure
 	// they take precedence.
 	if _, err := flags.Parse(&cfg); err != nil {
+		return nil, err
+	}
+
+	// Setup dial and DNS resolution functions depending on the specified
+	// options. The default is to use the standard golang "net" package
+	// functions. When Tor's proxy is specified, the dial function is set to
+	// the proxy specific dial function and the DNS resolution functions use
+	// Tor.
+	cfg.net = &torsvc.RegularNet{}
+	if cfg.Tor.Socks != "" && cfg.Tor.DNS != "" {
+		// Validate Tor port number
+		torport, err := strconv.Atoi(cfg.Tor.Socks)
+		if err != nil || torport < 1024 || torport > 65535 {
+			str := "%s: The tor socks5 port must be between 1024 and 65535"
+			err := fmt.Errorf(str, funcName)
+			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintln(os.Stderr, usageMessage)
+			return nil, err
+		}
+
+		// If ExternalIPs is set, throw an error since we cannot
+		// listen for incoming connections via Tor's SOCKS5 proxy.
+		if len(cfg.ExternalIPs) != 0 {
+			str := "%s: Cannot set externalip flag with proxy flag - " +
+				"cannot listen for incoming connections via Tor's " +
+				"socks5 proxy"
+			err := fmt.Errorf(str, funcName)
+			return nil, err
+		}
+
+		cfg.net = &torsvc.TorProxyNet{
+			TorDNS:   cfg.Tor.DNS,
+			TorSocks: cfg.Tor.Socks,
+		}
+
+		// If we are using Tor, since we only want connections routed
+		// through Tor, listening is disabled.
+		cfg.DisableListen = true
+
+	} else if cfg.Tor.Socks != "" || cfg.Tor.DNS != "" {
+		// Both TorSocks and TorDNS must be set.
+		str := "%s: Both the tor.socks and the tor.dns flags must be set" +
+			"to properly route connections and avoid DNS leaks while" +
+			"using Tor"
+		err := fmt.Errorf(str, funcName)
 		return nil, err
 	}
 
@@ -638,7 +693,7 @@ func supportedSubsystems() []string {
 func noiseDial(idPriv *btcec.PrivateKey) func(net.Addr) (net.Conn, error) {
 	return func(a net.Addr) (net.Conn, error) {
 		lnAddr := a.(*lnwire.NetAddress)
-		return brontide.Dial(idPriv, lnAddr)
+		return brontide.Dial(idPriv, lnAddr, cfg.net.Dial)
 	}
 }
 

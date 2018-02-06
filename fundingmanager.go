@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -684,13 +685,16 @@ func (f *fundingManager) failFundingFlow(peer *btcec.PublicKey,
 
 	fndgLog.Errorf("Failing funding flow: %v", spew.Sdump(errMsg))
 
+	if _, err := f.cancelReservationCtx(peer, tempChanID); err != nil {
+		fndgLog.Errorf("unable to cancel reservation: %v", err)
+	}
+
 	err := f.cfg.SendToPeer(peer, errMsg)
 	if err != nil {
 		fndgLog.Errorf("unable to send error message to peer %v", err)
 		return
 	}
 
-	f.cancelReservationCtx(peer, tempChanID)
 	return
 }
 
@@ -2330,7 +2334,7 @@ func (f *fundingManager) handleInitFundingMsg(msg *initFundingMsg) {
 	// request will fail, and be aborted.
 	reservation, err := f.cfg.Wallet.InitChannelReservation(capacity,
 		localAmt, msg.pushAmt, commitFeePerKw, msg.fundingFeePerWeight,
-		peerKey, msg.peerAddress.Address, &msg.chainHash, channelFlags)
+		peerKey, msg.peerAddress.Address.(*net.TCPAddr), &msg.chainHash, channelFlags)
 	if err != nil {
 		msg.err <- err
 		return

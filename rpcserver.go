@@ -589,7 +589,8 @@ func (r *rpcServer) ConnectPeer(ctx context.Context,
 		addr = in.Addr.Host
 	}
 
-	host, err := net.ResolveTCPAddr("tcp", addr)
+	// We use ResolveTCPAddr here in case we wish to resolve hosts over Tor.
+	host, err := cfg.net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -1235,7 +1236,7 @@ func (r *rpcServer) ListPeers(ctx context.Context,
 			PubKey:    hex.EncodeToString(nodePub),
 			PeerId:    serverPeer.id,
 			Address:   serverPeer.conn.RemoteAddr().String(),
-			Inbound:   serverPeer.inbound,
+			Inbound:   !serverPeer.inbound, // Flip for display
 			BytesRecv: atomic.LoadUint64(&serverPeer.bytesReceived),
 			BytesSent: atomic.LoadUint64(&serverPeer.bytesSent),
 			SatSent:   satSent,
