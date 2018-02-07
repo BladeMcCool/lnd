@@ -186,7 +186,7 @@ type fundingConfig struct {
 	SignMessage func(pubKey *btcec.PublicKey, msg []byte) (*btcec.Signature, error)
 
 	// CurrentNodeAnnouncement should return the latest, fully signed node
-	// announcement from the backing Lighting Network node.
+	// announcement from the backing Lightning Network node.
 	CurrentNodeAnnouncement func() (lnwire.NodeAnnouncement, error)
 
 	// SendAnnouncement is used by the FundingManager to send
@@ -669,7 +669,7 @@ func (f *fundingManager) CancelPeerReservations(nodePub [33]byte) {
 }
 
 // failFundingFlow will fail the active funding flow with the target peer,
-// identified by it's unique temporary channel ID. This method is send an error
+// identified by its unique temporary channel ID. This method is send an error
 // to the remote peer, and also remove the reservation from our set of pending
 // reservations.
 //
@@ -981,7 +981,7 @@ func (f *fundingManager) processFundingAccept(msg *lnwire.AcceptChannel,
 	}
 }
 
-// handleFundingAceept processes a response to the workflow initiation sent by
+// handleFundingAccept processes a response to the workflow initiation sent by
 // the remote peer. This message then queues a message with the funding
 // outpoint, and a commitment signature to the remote peer.
 func (f *fundingManager) handleFundingAccept(fmsg *fundingAcceptMsg) {
@@ -1305,7 +1305,7 @@ func (f *fundingManager) processFundingSigned(msg *lnwire.FundingSigned,
 // confirmations, a message is sent to the responding peer along with a compact
 // encoding of the location of the channel within the blockchain.
 func (f *fundingManager) handleFundingSigned(fmsg *fundingSignedMsg) {
-	// As the funding signed message will reference the reservation by it's
+	// As the funding signed message will reference the reservation by its
 	// permanent channel ID, we'll need to perform an intermediate look up
 	// before we can obtain the reservation.
 	f.resMtx.Lock()

@@ -306,7 +306,7 @@ func lndMain() error {
 
 			for _, channel := range dbChannels {
 				if chanID.IsChanPoint(&channel.FundingOutpoint) {
-					// TODO(rosbeef): populate baecon
+					// TODO(roasbeef): populate beacon
 					return lnwallet.NewLightningChannel(
 						activeChainControl.signer,
 						server.witnessBeacon,

@@ -647,7 +647,7 @@ func closeChannel(ctx *cli.Context) error {
 		err  error
 	)
 
-	// Show command help if no arguments provieded
+	// Show command help if no arguments provided
 	if ctx.NArg() == 0 && ctx.NumFlags() == 0 {
 		cli.ShowCommandHelp(ctx, "closechannel")
 		return nil
@@ -1020,7 +1020,7 @@ var sendPaymentCommand = cli.Command{
 }
 
 func sendPayment(ctx *cli.Context) error {
-	// Show command help if no arguments provieded
+	// Show command help if no arguments provided
 	if ctx.NArg() == 0 && ctx.NumFlags() == 0 {
 		cli.ShowCommandHelp(ctx, "sendpayment")
 		return nil
@@ -1445,7 +1445,7 @@ func normalizeFunc(edges []*lnrpc.ChannelEdge, scaleFactor float64) func(int64) 
 
 	for _, edge := range edges {
 		// In order to obtain saner values, we reduce the capacity of a
-		// channel to it's base 2 logarithm.
+		// channel to its base 2 logarithm.
 		z := math.Log2(float64(edge.Capacity))
 
 		if z < min {
@@ -1530,7 +1530,7 @@ func drawChannelGraph(graph *lnrpc.ChannelGraph) error {
 		edgeWeight := strconv.FormatFloat(amt, 'f', -1, 64)
 
 		// The label for each edge will simply be a truncated version
-		// of it's channel ID.
+		// of its channel ID.
 		chanIDStr := strconv.FormatUint(edge.ChannelId, 10)
 		edgeLabel := fmt.Sprintf(`"cid:%v"`, truncateStr(chanIDStr, 7))
 
@@ -1836,7 +1836,7 @@ func debugLevel(ctx *cli.Context) error {
 	return nil
 }
 
-var decodePayReqComamnd = cli.Command{
+var decodePayReqCommand = cli.Command{
 	Name:        "decodepayreq",
 	Usage:       "Decode a payment request.",
 	Description: "Decode the passed payment request revealing the destination, payment hash and value of the payment request",

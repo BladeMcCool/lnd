@@ -38,7 +38,7 @@ var (
 	sourceKey = []byte("source")
 
 	// aliasIndexBucket is a sub-bucket that's nested within the main
-	// nodeBucket. This bucket maps the public key of a node to it's
+	// nodeBucket. This bucket maps the public key of a node to its
 	// current alias. This bucket is provided as it can be used within a
 	// future UI layer to add an additional degree of confirmation.
 	aliasIndexBucket = []byte("alias")
@@ -180,7 +180,7 @@ func (c *ChannelGraph) ForEachChannel(cb func(*ChannelEdgeInfo, *ChannelEdgePoli
 
 			// The targeted edge may have not been advertised
 			// within the network, so we ensure it's non-nil before
-			// deferencing its attributes.
+			// dereferencing its attributes.
 			if edge1 != nil {
 				edge1.db = c.db
 				if edge1.Node != nil {
@@ -199,7 +199,7 @@ func (c *ChannelGraph) ForEachChannel(cb func(*ChannelEdgeInfo, *ChannelEdgePoli
 
 			// The targeted edge may have not been advertised
 			// within the network, so we ensure it's non-nil before
-			// deferencing its attributes.
+			// dereferencing its attributes.
 			if edge2 != nil {
 				edge2.db = c.db
 				if edge2.Node != nil {
@@ -499,7 +499,7 @@ func (c *ChannelGraph) HasChannelEdge(chanID uint64) (time.Time, time.Time, bool
 
 		// If the channel has been found in the graph, then retrieve
 		// the edges itself so we can return the last updated
-		// timestmaps.
+		// timestamps.
 		nodes := tx.Bucket(nodeBucket)
 		if nodes == nil {
 			return ErrGraphNodeNotFound
@@ -529,7 +529,7 @@ func (c *ChannelGraph) HasChannelEdge(chanID uint64) (time.Time, time.Time, bool
 }
 
 // UpdateChannelEdge retrieves and update edge of the graph database. Method
-// only reserved for updating an edge info after it's already been created.
+// only reserved for updating an edge info after its already been created.
 // In order to maintain this constraints, we return an error in the scenario
 // that an edge info hasn't yet been created yet, but someone attempts to update
 // it.
@@ -595,7 +595,7 @@ func (c *ChannelGraph) PruneGraph(spentOutputs []*wire.OutPoint,
 			return err
 		}
 
-		// For each of the outpoints that've been spent within the
+		// For each of the outpoints that have been spent within the
 		// block, we attempt to delete them from the graph as if that
 		// outpoint was a channel, then it has now been closed.
 		for _, chanPoint := range spentOutputs {
@@ -806,7 +806,7 @@ func (c *ChannelGraph) PruneTip() (*chainhash.Hash, uint32, error) {
 	return &tipHash, tipHeight, nil
 }
 
-// DeleteChannelEdge removes an edge from the database as identified by it's
+// DeleteChannelEdge removes an edge from the database as identified by its
 // funding outpoint. If the edge does not exist within the database, then
 // ErrEdgeNotFound will be returned.
 func (c *ChannelGraph) DeleteChannelEdge(chanPoint *wire.OutPoint) error {
@@ -1271,7 +1271,7 @@ type ChannelEdgeInfo struct {
 
 // ChannelAuthProof is the authentication proof (the signature portion) for a
 // channel. Using the four signatures contained in the struct, and some
-// axillary knowledge (the funding script, node identities, and outpoint) nodes
+// auxillary knowledge (the funding script, node identities, and outpoint) nodes
 // on the network are able to validate the authenticity and existence of a
 // channel. Each of these signatures signs the following digest: chanID ||
 // nodeID1 || nodeID2 || bitcoinKey1|| bitcoinKey2 || 2-byte-feature-len ||

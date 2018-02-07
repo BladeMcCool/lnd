@@ -86,7 +86,7 @@ func New(cfg Config) (*BtcWallet, error) {
 		}
 	} else {
 		// Wallet has been created and been initialized at this point,
-		// open it along with all the required DB namepsaces, and the
+		// open it along with all the required DB namespaces, and the
 		// DB itself.
 		wallet, err = loader.OpenExistingWallet(pubPass, false)
 		if err != nil {
@@ -272,7 +272,7 @@ func (b *BtcWallet) FetchRootKey() (*btcec.PrivateKey, error) {
 
 	if rootAddrHash == nil {
 		// Otherwise, we need to generate a fresh address from the
-		// wallet, then stores it's hash160 within the database so we
+		// wallet, then stores its hash160 within the database so we
 		// can look up the exact key later.
 		if err := walletdb.Update(b.db, func(tx walletdb.ReadWriteTx) error {
 			addrmgrNs := tx.ReadWriteBucket(waddrmgrNamespaceKey)
