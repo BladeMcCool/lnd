@@ -1652,6 +1652,8 @@ func (r *rpcServer) SendPayment(paymentStream lnrpc.Lightning_SendPaymentServer)
 	// Launch a new goroutine to handle reading new payment requests from
 	// the client. This way we can handle errors independently of blocking
 	// and waiting for the next payment request to come through.
+	rpcsLog.Warnf("SendPayment here1")
+
 	reqQuit := make(chan struct{})
 	defer func() {
 		close(reqQuit)
@@ -1812,6 +1814,7 @@ func (r *rpcServer) SendPayment(paymentStream lnrpc.Lightning_SendPaymentServer)
 				// successful, the route chosen will be
 				// returned. Otherwise, we'll get a non-nil
 				// error.
+				rpcsLog.Warnf("SendPayment: here2, %s -> %x", p.msat, destNode.SerializeCompressed())
 				payment := &routing.LightningPayment{
 					Target:      destNode,
 					Amount:      p.msat,
@@ -1821,6 +1824,7 @@ func (r *rpcServer) SendPayment(paymentStream lnrpc.Lightning_SendPaymentServer)
 					payment.FinalCLTVDelta = &p.cltvDelta
 				}
 				preImage, route, err := r.server.chanRouter.SendPayment(payment)
+				rpcsLog.Warnf("SendPayment: here3 after call to r.server.chanRouter.SendPayment(payment)")
 				if err != nil {
 					// If we receive payment error than,
 					// instead of terminating the stream,
@@ -2608,6 +2612,8 @@ func (r *rpcServer) QueryRoutes(ctx context.Context,
 	// Query the channel router for a possible path to the destination that
 	// can carry `in.Amt` satoshis _including_ the total fee required on
 	// the route.
+	rpcsLog.Warnf("asked to findRoutes for %d -> %x", in.Amt, pubKeyBytes)
+
 	routes, err := r.server.chanRouter.FindRoutes(pubKey, amtMSat)
 	if err != nil {
 		return nil, err
