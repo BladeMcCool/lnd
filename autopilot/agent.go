@@ -2,6 +2,7 @@ package autopilot
 
 import (
 	"net"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -598,6 +599,8 @@ func (a *Agent) checkNodeConnectivity() {
 	}()
 	//another goroutine to execute that
 
+	var junkIP = regexp.MustCompile(`^127\.0\.0\.1:`)
+
 	expectResults := int64(0)
 	bailAfterExpectResults := int64(0)
 	go func() {
@@ -627,13 +630,16 @@ func (a *Agent) checkNodeConnectivity() {
 						log.Warnf("already connected to the node (%x) that owns %s (cool!)", addr.nID, addr.addr)
 						continue
 					}
-
-					log.Warnf("can we connect to? %s %d / %d (addr.count %d)", addr.addr, workAccepted, totalAddress, addr.count)
 					lnAddr, err := server.GetLnAddr(nodePubKey, addr.addr)
 					if err != nil {
 						log.Warnf("getLnAddr Error: %s", err.Error())
 						continue
 					}
+					if junkIP.MatchString(addr.addr.String()) {
+						log.Warnf("not going to try to connect to %s (lol)", addr.addr)
+						continue
+					}
+					log.Warnf("can we connect to? %s %d / %d (addr.count %d)", addr.addr, workAccepted, totalAddress, addr.count)
 
 					addr.started = true
 
@@ -657,12 +663,13 @@ func (a *Agent) checkNodeConnectivity() {
 						log.Warnf("connect err? %s ->  %s ", lnAddr.Address, err.Error())
 						continue
 					}
+
 					addr.succeded = true
 					//TODO: figure out how to deal with this error that we see from some peers when trying to open channels later ..
 					//    "rpc error: code = Code(208) desc = local/remote feerates are too different"
 					//    seems to be a c-lightning thing. (see https://github.com/ElementsProject/lightning/issues/443)
 					//    ideally i'd like to be able to determine that the policies are mismatched right here so that we know not to bother with this peer.
-					log.Warnf("WOOTWOOT actually connected to %s (result #%d)", lnAddr.Address, expectResults+1)
+					log.Warnf("WOOTWOOT actually connected to %x@%s (result #%d)", addr.nID, lnAddr.Address, expectResults+1)
 
 					err = server.DisconnectPeer(nodePubKey)
 					if err != nil {

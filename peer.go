@@ -239,12 +239,12 @@ func (p *peer) Start() error {
 		msgChan <- msg
 	}()
 
+	handshakeTimeoutSec := 15
 	select {
 	// In order to avoid blocking indefinitely, we'll give the other peer
 	// an upper timeout of 15 seconds to respond before we bail out early.
-	case <-time.After(time.Second * 15):
-		return fmt.Errorf("peer did not complete handshake within 5 " +
-			"seconds")
+	case <-time.After(time.Second * time.Duration(handshakeTimeoutSec)):
+		return fmt.Errorf("peer did not complete handshake within %d seconds", handshakeTimeoutSec)
 	case err := <-readErr:
 		if err != nil {
 			return fmt.Errorf("unable to read init msg: %v", err)
@@ -427,7 +427,7 @@ func (p *peer) Disconnect(reason error) {
 		return
 	}
 
-	peerLog.Tracef("Disconnecting %s, reason: %v", p, reason)
+	peerLog.Warnf("Disconnecting %s, reason: %v", p, reason)
 
 	// Ensure that the TCP connection is properly closed before continuing.
 	p.conn.Close()

@@ -1285,7 +1285,7 @@ func (s *server) shouldRequestGraphSync() bool {
 // peer by adding it to the server's global list of all active peers, and
 // starting all the goroutines the peer needs to function properly.
 func (s *server) peerConnected(conn net.Conn, connReq *connmgr.ConnReq,
-	inbound bool) {
+	inbound bool) error {
 
 	brontideConn := conn.(*brontide.Conn)
 	peerAddr := &lnwire.NetAddress{
@@ -1309,7 +1309,7 @@ func (s *server) peerConnected(conn net.Conn, connReq *connmgr.ConnReq,
 	p, err := newPeer(conn, connReq, s, peerAddr, inbound, localFeatures)
 	if err != nil {
 		srvrLog.Errorf("unable to create peer %v", err)
-		return
+		return nil
 	}
 
 	// TODO(roasbeef): update IP address for link-node
@@ -1318,11 +1318,13 @@ func (s *server) peerConnected(conn net.Conn, connReq *connmgr.ConnReq,
 	// Attempt to start the peer, if we're unable to do so, then disconnect
 	// this peer.
 	if err := p.Start(); err != nil {
+		// srvrLog.Warnf(format, ...)
 		p.Disconnect(errors.Errorf("unable to start peer: %v", err))
-		return
+		return err
 	}
 
 	s.addPeer(p)
+	return nil
 }
 
 // shouldDropConnection determines if our local connection to a remote peer
@@ -1423,10 +1425,23 @@ func (s *server) InboundPeerConnected(conn net.Conn) {
 // connection.
 // NOTE: This function is safe for concurrent access.
 func (s *server) OutboundPeerConnected(connReq *connmgr.ConnReq, conn net.Conn) {
+	s.outboundPeerConnected(connReq, conn)
+	s.peerConnected(conn, connReq, true)
+}
+
+func (s *server) outboundPeerConnectedCheck(connReq *connmgr.ConnReq, conn net.Conn) error {
+	err := s.outboundPeerConnected(connReq, conn)
+	if err != nil {
+		return err
+	}
+	return s.peerConnected(conn, connReq, true)
+}
+func (s *server) outboundPeerConnected(connReq *connmgr.ConnReq, conn net.Conn) error {
+
 	// Exit early if we have already been instructed to shutdown, this
 	// prevents any delayed callbacks from accidentally registering peers.
 	if s.Stopped() {
-		return
+		return errors.New("peer is stopped")
 	}
 
 	localPub := s.identityPriv.PubKey()
@@ -1439,17 +1454,17 @@ func (s *server) OutboundPeerConnected(connReq *connmgr.ConnReq, conn net.Conn) 
 	// If we already have an outbound connection to this peer, then ignore
 	// this new connection.
 	if _, ok := s.outboundPeers[pubStr]; ok {
-		srvrLog.Debugf("Ignoring duplicate outbound connection")
+		srvrLog.Warnf("Ignoring duplicate outbound connection")
 		conn.Close()
-		return
+		return errors.New("dupe outbound conn")
 	}
 	if _, ok := s.persistentConnReqs[pubStr]; !ok && connReq != nil {
-		srvrLog.Debugf("Ignoring cancelled outbound connection")
+		srvrLog.Warnf("Ignoring cancelled outbound connection")
 		conn.Close()
-		return
+		return errors.New("cancelled outbound conn")
 	}
 
-	srvrLog.Infof("Established connection to: %v", conn.RemoteAddr())
+	srvrLog.Warnf("Established connection to: %v", conn.RemoteAddr())
 
 	// As we've just established an outbound connection to this peer, we'll
 	// cancel all other persistent connection requests and eliminate the
@@ -1488,7 +1503,7 @@ func (s *server) OutboundPeerConnected(connReq *connmgr.ConnReq, conn net.Conn) 
 				s.connMgr.Remove(connReq.ID())
 			}
 			conn.Close()
-			return
+			return nil
 		}
 
 		// Otherwise, _their_ connection should be dropped. So we'll
@@ -1504,7 +1519,7 @@ func (s *server) OutboundPeerConnected(connReq *connmgr.ConnReq, conn net.Conn) 
 		s.ignorePeerTermination[connectedPeer] = struct{}{}
 	}
 
-	s.peerConnected(conn, connReq, true)
+	return nil
 }
 
 // addPeer adds the passed peer to the server's global state of all active
@@ -1528,6 +1543,7 @@ func (s *server) addPeer(p *peer) {
 	pubStr := string(p.addr.IdentityKey.SerializeCompressed())
 
 	s.peersByID[p.id] = p
+	srvrLog.Warnf("addPeer: add %x to s.peersByPub", p.addr.IdentityKey.SerializeCompressed())
 	s.peersByPub[pubStr] = p
 
 	if p.inbound {
@@ -1585,6 +1601,7 @@ func (s *server) removePeer(p *peer) {
 	pubStr := string(p.addr.IdentityKey.SerializeCompressed())
 
 	delete(s.peersByID, p.id)
+	srvrLog.Warnf("removePeer: delete %x from s.peersByPub", p.addr.IdentityKey.SerializeCompressed())
 	delete(s.peersByPub, pubStr)
 
 	if p.inbound {
@@ -1685,8 +1702,10 @@ func (s *server) ConnectToPeer(addr *lnwire.NetAddress, perm bool) error {
 	// Once the connection has been made, we can notify the server of the
 	// new connection via our public endpoint, which will require the lock
 	// an add the peer to the server's internal state.
-	s.OutboundPeerConnected(nil, conn)
-
+	err = s.outboundPeerConnectedCheck(nil, conn)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
