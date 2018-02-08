@@ -1304,11 +1304,12 @@ func (r *ChannelRouter) FindRoutes(target *btcec.PublicKey,
 		return validRoutes[i].TotalFees < validRoutes[j].TotalFees
 	})
 
-	go log.Warnf("FindRoutes: Obtained %v paths sending %v to %x: %v", len(validRoutes),
+	go log.Tracef("FindRoutes: Obtained %v paths sending %v to %x: %v", len(validRoutes),
 		amt, dest, newLogClosure(func() string {
 			return spew.Sdump(validRoutes)
 		}),
 	)
+	log.Warnf("FindRoutes: Obtained %d paths sending %v to %x", len(validRoutes), amt, dest)
 
 	// Populate the cache with this set of fresh routes so we can
 	// reuse them in the future.

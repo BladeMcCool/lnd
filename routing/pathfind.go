@@ -635,7 +635,7 @@ func findPaths(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 		log.Errorf("Unable to find path: %v", err)
 		return nil, err
 	}
-
+	log.Warnf("findPaths: got starting path.")
 	// Manually insert a "self" edge emanating from ourselves. This
 	// self-edge is required in order for the path finding algorithm to
 	// function properly.
@@ -701,6 +701,7 @@ func findPaths(tx *bolt.Tx, graph *channeldb.ChannelGraph,
 			// shortest path from the spur node to the destination.
 			spurPath, err := findPath(tx, graph, spurNode, target,
 				ignoredVertexes, ignoredEdges, amt)
+			log.Warnf("findPaths: got a spur path for k = %d and i = %d", k, i)
 
 			// If we weren't able to find a path, we'll continue to
 			// the next round.
