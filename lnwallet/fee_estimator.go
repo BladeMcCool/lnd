@@ -97,7 +97,9 @@ func NewBtcdFeeEstimator(rpcConfig rpcclient.ConnConfig,
 
 	rpcConfig.DisableConnectOnNew = true
 	rpcConfig.DisableAutoReconnect = false
+	rpcclient.UseLogger(walletLog)
 	chainConn, err := rpcclient.New(&rpcConfig, nil)
+
 	if err != nil {
 		return nil, err
 	}
