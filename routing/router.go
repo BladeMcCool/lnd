@@ -1511,10 +1511,11 @@ func (r *ChannelRouter) SendPayment(payment *LightningPayment) ([32]byte, *Route
 			circuit)
 
 		if sendError == nil {
+			log.Warnf("SendPayment (ChannelRouter) here 6a SUCCESS to %x", payment.Target.SerializeCompressed())
 			return preImage, route, nil
 		}
 
-		log.Warnf("SendPayment (ChannelRouter) here 6 ATTEMPT FAILED with err like %s", sendError.Error())
+		log.Warnf("SendPayment (ChannelRouter) here 6b ATTEMPT FAILED to %x with err like %s", payment.Target.SerializeCompressed(), sendError.Error())
 
 		// An error occurred when attempting to send the
 		// payment, depending on the error type, we'll either
