@@ -58,16 +58,21 @@ var _ AttachmentHeuristic = (*ConstrainedPrefAttachment)(nil)
 //
 // NOTE: This is a part of the AttachmentHeuristic interface.
 func (p *ConstrainedPrefAttachment) NeedMoreChans(channels []Channel,
-	funds btcutil.Amount) (btcutil.Amount, bool) {
+	funds btcutil.Amount) (btcutil.Amount, uint32, bool) {
 	log.Warnf("NeedMoreChans: whee1")
 
 	// If we're already over our maximum allowed number of channels, then
 	// we'll instruct the controller not to create any more channels.
 	if len(channels) >= int(p.chanLimit) {
-		return 0, false
+		return 0, 0, false
 	}
 
 	log.Warnf("NeedMoreChans: whee2")
+	// The number of additional channels that should be opened is the
+	// difference between the channel limit, and the number of channels we
+	// already have open.
+	numAdditionalChans := uint32(p.chanLimit) - uint32(len(channels))
+
 	// First, we'll tally up the total amount of funds that are currently
 	// present within the set of active channels.
 	var totalChanAllocation btcutil.Amount
@@ -89,7 +94,7 @@ func (p *ConstrainedPrefAttachment) NeedMoreChans(channels []Channel,
 	needMore := fundsFraction < p.threshold
 	log.Warnf("NeedMoreChans: whee3")
 	if !needMore {
-		return 0, false
+		return 0, 0, false
 	}
 
 	// Now that we know we need more funds, we'll compute the amount of
@@ -97,7 +102,7 @@ func (p *ConstrainedPrefAttachment) NeedMoreChans(channels []Channel,
 	targetAllocation := btcutil.Amount(float64(totalFunds) * p.threshold)
 	fundsAvailable := targetAllocation - totalChanAllocation
 	log.Warnf("NeedMoreChans: whee4")
-	return fundsAvailable, true
+	return fundsAvailable, numAdditionalChans, true
 }
 
 // // NodeID is a simple type that holds a EC public key serialized in compressed
@@ -141,8 +146,8 @@ func shuffleCandidates(candidates []Node) []Node {
 //
 // NOTE: This is a part of the AttachmentHeuristic interface.
 func (p *ConstrainedPrefAttachment) Select(self *btcec.PublicKey, g ChannelGraph,
-	fundsAvailable btcutil.Amount,
-	skipNodes map[NodeID]struct{}, _ []Channel) ([]AttachmentDirective, error) {
+	fundsAvailable btcutil.Amount, numNewChans uint32,
+	skipNodes map[NodeID]struct{}) ([]AttachmentDirective, error) {
 
 	// TODO(roasbeef): rename?
 
@@ -155,8 +160,7 @@ func (p *ConstrainedPrefAttachment) Select(self *btcec.PublicKey, g ChannelGraph
 	// We'll continue our attachment loop until we've exhausted the current
 	// amount of available funds.
 	visited := make(map[NodeID]struct{})
-	chanLimit := p.chanLimit - uint16(len(skipNodes))
-	for i := uint16(0); i < chanLimit; i++ {
+	for i := uint32(0); i < numNewChans; i++ {
 		// selectionSlice will be used to randomly select a node
 		// according to a power law distribution. For each connected
 		// edge, we'll add an instance of the node to this slice. Thus,

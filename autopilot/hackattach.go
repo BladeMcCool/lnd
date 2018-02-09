@@ -53,7 +53,7 @@ var _ AttachmentHeuristic = (*HackyPrefAttachment)(nil)
 // NOTE: This is a part of the AttachmentHeuristic interface.
 // BMC todo: dont count inbound channels.
 func (p *HackyPrefAttachment) NeedMoreChans(channels []Channel,
-	funds btcutil.Amount) (btcutil.Amount, bool) {
+	funds btcutil.Amount) (btcutil.Amount, uint32, bool) {
 
 	// If we're already over our maximum allowed number of channels, then
 	// we'll instruct the controller not to create any more channels.
@@ -73,9 +73,9 @@ func (p *HackyPrefAttachment) NeedMoreChans(channels []Channel,
 		ourChannelsCount += 1
 		totalChanAllocation += channel.Capacity
 	}
-	log.Warnf("NeedMoreChans: num chans: %d, chan limit: %d", ourChannelsCount, int(p.chanLimit))
+	log.Warnf("NeedMoreChans: num of our chans: %d, chan limit: %d", ourChannelsCount, int(p.chanLimit))
 	if ourChannelsCount >= int(p.chanLimit) {
-		return 0, false
+		return 0, 0, false
 	}
 
 	// With this value known, we'll now compute the total amount of fund
@@ -92,15 +92,17 @@ func (p *HackyPrefAttachment) NeedMoreChans(channels []Channel,
 	needMore := fundsFraction < p.threshold
 	log.Warnf("NeedMoreChans: totalChanAllocation: %v, funds: %v, totalFunds: %v, fundsFraction %.2f, needMore: %t", totalChanAllocation, funds, totalFunds, fundsFraction, needMore)
 	if !needMore {
-		return 0, false
+		return 0, 0, false
 	}
+
+	numChansToOpen := int(p.chanLimit) - ourChannelsCount
 
 	// Now that we know we need more funds, we'll compute the amount of
 	// additional funds we should allocate towards channels.
 	targetAllocation := btcutil.Amount(float64(totalFunds) * p.threshold)
 	fundsAvailable := targetAllocation - totalChanAllocation
 	log.Warnf("NeedMoreChans: targetAllocation: %v, fundsAvailable: %v", targetAllocation, fundsAvailable)
-	return fundsAvailable, true
+	return fundsAvailable, uint32(numChansToOpen), true
 }
 
 // Select returns a candidate set of attachment directives that should be
@@ -119,7 +121,8 @@ func (p *HackyPrefAttachment) NeedMoreChans(channels []Channel,
 // NOTE: This is a part of the AttachmentHeuristic interface.
 func (p *HackyPrefAttachment) Select(self *btcec.PublicKey, g ChannelGraph,
 	fundsAvailable btcutil.Amount,
-	skipNodes map[NodeID]struct{}, totalChans []Channel) ([]AttachmentDirective, error) {
+	numChansToOpen uint32,
+	skipNodes map[NodeID]struct{}) ([]AttachmentDirective, error) {
 
 	// TODO(roasbeef): rename?
 
@@ -128,9 +131,7 @@ func (p *HackyPrefAttachment) Select(self *btcec.PublicKey, g ChannelGraph,
 	if fundsAvailable < p.minChanSize {
 		return directives, nil
 	}
-	numChansToOpen := int(p.chanLimit) - len(totalChans)
-	// log.Warnf("Select: want to have total of %d channels, need to open %d to achieve that. Will select from %d unique (%d weighted) node choices, have %d channels and %d skipNodes out of the gate!!.", p.chanLimit, numChansToOpen, len(idToNode), len(selectionSlice), len(totalChans), len(skipNodes))
-	log.Warnf("Select: want to have total of %d channels, need to open %d to achieve that. (already have %d chans open)", p.chanLimit, numChansToOpen, len(totalChans))
+	log.Warnf("Select: want to have total of %d channels, and have been told to open up to %d  more to achieve that.", p.chanLimit, numChansToOpen)
 	if numChansToOpen <= 0 {
 		return directives, nil
 	}
@@ -276,7 +277,7 @@ func (p *HackyPrefAttachment) Select(self *btcec.PublicKey, g ChannelGraph,
 
 		visited[nID] = struct{}{}
 		candidateCount += 1
-		if candidateCount >= numChansToOpen {
+		if candidateCount >= int(numChansToOpen) {
 			break
 		}
 	}

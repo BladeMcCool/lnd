@@ -428,7 +428,7 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 			// determine if we should open up any additional
 			// channels or modify existing channels.
 			log.Warnf("Determine if more chans needed ...")
-			availableFunds, needMore := a.cfg.Heuristic.NeedMoreChans(
+			availableFunds, numChans, needMore := a.cfg.Heuristic.NeedMoreChans(
 				totalChans, a.totalBalance,
 			)
 			if !needMore {
@@ -458,8 +458,7 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 			log.Warnf("Select candidates with chosen heuristic ...")
 			chanCandidates, err := a.cfg.Heuristic.Select(
 				a.cfg.Self, a.cfg.Graph, availableFunds,
-				nodesToSkip,
-				totalChans,
+				numChans, nodesToSkip,
 			)
 			if err != nil {
 				log.Errorf("Unable to select candidates for "+
@@ -505,6 +504,7 @@ func (a *Agent) controller(startingBalance btcutil.Amount) {
 				go func(directive AttachmentDirective) {
 					pub := directive.PeerKey
 					err := a.cfg.ChanController.OpenChannel(
+
 						directive.PeerKey,
 						directive.ChanAmt,
 						directive.Addrs,
